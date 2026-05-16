@@ -14,10 +14,18 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from models import OUTPUT_COLUMNS
+from sendability import evaluate_sendability
 
 
 CLIENT_REVIEW_COLUMNS = [
     "status",
+    "sendability_decision",
+    "sendability_score",
+    "sendability_reasons",
+    "human_decision",
+    "edited_line",
+    "edit_reason_category",
+    "edit_notes",
     "company",
     "person",
     "personalized_line",
@@ -212,43 +220,47 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
         if not personalized_line and "ai_generation_unavailable" in str(row.get("quality_flags", "")):
             personalized_line = "[research only, AI writing not available]"
         status = _status_for(row, personalized_line)
-        review_rows.append(
-            {
-                "status": status,
-                "company": row.get("company_name", ""),
-                "person": row.get("recipient_name", ""),
-                "personalized_line": personalized_line,
-                "template_preview": _cell_lines(row.get("template_preview", ""), 520),
-                "friction_type": row.get("friction_type", ""),
-                "surface_checked": row.get("surface_checked", ""),
-                "conversion_outcome": row.get("conversion_outcome", ""),
-                "product_surface_type": row.get("product_surface_type", ""),
-                "research_priority": row.get("research_priority", ""),
-                "angle_gate_decision": row.get("angle_gate_decision", ""),
-                "app_check_status": row.get("app_check_status", ""),
-                "recommended_manual_check": _cell_lines(row.get("recommended_manual_check", ""), 520),
-                "visual_flags": _cell_lines(row.get("visual_quality_flags", ""), 240),
-                "visual_confidence": row.get("visual_confidence", ""),
-                "visual_confidence_score": row.get("visual_confidence_score", ""),
-                "visual_confidence_reasons": _cell_lines(row.get("visual_confidence_reasons", ""), 360),
-                "evidence_found": _cell_lines(evidence, 760),
-                "screenshots": _cell_lines(row.get("screenshot_paths", ""), 520),
-                "shareable_screenshots": _cell_lines(row.get("shareable_screenshot_files", ""), 520),
-                "trace_files": _cell_lines(row.get("trace_files", ""), 520),
-                "ux_validator_findings": _cell_lines(row.get("ux_validator_findings", ""), 520),
-                "advanced_detector_flags": _cell_lines(row.get("advanced_detector_flags", ""), 240),
-                "dead_link_checks": _cell_lines(row.get("dead_link_checks", ""), 420),
-                "needs_manual_review": _yes_no(row.get("needs_manual_review", "")),
-                "quality_flags": _cell_lines(row.get("quality_flags", ""), 240),
-                "reviewer_notes": notes,
-                "role": row.get("recipient_role", ""),
-                "website": row.get("website_url", ""),
-                "source_urls": _cell_lines(row.get("source_urls", ""), 520),
-                "llm_calls": row.get("llm_calls", ""),
-                "estimated_input_tokens": row.get("estimated_input_tokens", ""),
-                "estimated_output_tokens": row.get("estimated_output_tokens", ""),
-            }
-        )
+        review_row = {
+            "status": status,
+            "company": row.get("company_name", ""),
+            "person": row.get("recipient_name", ""),
+            "personalized_line": personalized_line,
+            "template_preview": _cell_lines(row.get("template_preview", ""), 520),
+            "friction_type": row.get("friction_type", ""),
+            "surface_checked": row.get("surface_checked", ""),
+            "conversion_outcome": row.get("conversion_outcome", ""),
+            "product_surface_type": row.get("product_surface_type", ""),
+            "research_priority": row.get("research_priority", ""),
+            "angle_gate_decision": row.get("angle_gate_decision", ""),
+            "app_check_status": row.get("app_check_status", ""),
+            "recommended_manual_check": _cell_lines(row.get("recommended_manual_check", ""), 520),
+            "visual_flags": _cell_lines(row.get("visual_quality_flags", ""), 240),
+            "visual_confidence": row.get("visual_confidence", ""),
+            "visual_confidence_score": row.get("visual_confidence_score", ""),
+            "visual_confidence_reasons": _cell_lines(row.get("visual_confidence_reasons", ""), 360),
+            "evidence_found": _cell_lines(evidence, 760),
+            "screenshots": _cell_lines(row.get("screenshot_paths", ""), 520),
+            "shareable_screenshots": _cell_lines(row.get("shareable_screenshot_files", ""), 520),
+            "trace_files": _cell_lines(row.get("trace_files", ""), 520),
+            "ux_validator_findings": _cell_lines(row.get("ux_validator_findings", ""), 520),
+            "advanced_detector_flags": _cell_lines(row.get("advanced_detector_flags", ""), 240),
+            "dead_link_checks": _cell_lines(row.get("dead_link_checks", ""), 420),
+            "needs_manual_review": _yes_no(row.get("needs_manual_review", "")),
+            "quality_flags": _cell_lines(row.get("quality_flags", ""), 240),
+            "reviewer_notes": notes,
+            "role": row.get("recipient_role", ""),
+            "website": row.get("website_url", ""),
+            "source_urls": _cell_lines(row.get("source_urls", ""), 520),
+            "llm_calls": row.get("llm_calls", ""),
+            "estimated_input_tokens": row.get("estimated_input_tokens", ""),
+            "estimated_output_tokens": row.get("estimated_output_tokens", ""),
+        }
+        review_row.update(evaluate_sendability(review_row))
+        review_row.setdefault("human_decision", "unreviewed")
+        review_row.setdefault("edited_line", "")
+        review_row.setdefault("edit_reason_category", "not_reviewed")
+        review_row.setdefault("edit_notes", "")
+        review_rows.append(review_row)
         research_rows.append(
             {
                 "company": row.get("company_name", ""),
@@ -324,14 +336,26 @@ def _style_sheet(ws, widths: list[int], row_height: int = 54, freeze: str = "A2"
 
 
 def _style_review_status(ws) -> None:
-    fills = {
+    status_fills = {
         "Ready": PatternFill("solid", fgColor="D9EAD3"),
         "Review": PatternFill("solid", fgColor="FCE4D6"),
         "Research only": PatternFill("solid", fgColor="E7E6E6"),
     }
+    sendability_fills = {
+        "Send": PatternFill("solid", fgColor="D9EAD3"),
+        "Edit": PatternFill("solid", fgColor="FCE4D6"),
+        "Reject": PatternFill("solid", fgColor="F4CCCC"),
+    }
     for row in ws.iter_rows(min_row=2, max_col=1):
         cell = row[0]
-        fill = fills.get(str(cell.value or ""))
+        fill = status_fills.get(str(cell.value or ""))
+        if fill:
+            cell.fill = fill
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+    for row in ws.iter_rows(min_row=2, min_col=2, max_col=2):
+        cell = row[0]
+        fill = sendability_fills.get(str(cell.value or ""))
         if fill:
             cell.fill = fill
             cell.font = Font(bold=True)
@@ -343,6 +367,9 @@ def _summary_rows(review_rows: list[dict[str, Any]], research_rows: list[dict[st
     research_only = sum(1 for row in review_rows if row.get("status") == "Research only")
     review_needed = sum(1 for row in review_rows if _is_manual_review(row.get("needs_manual_review")))
     ready = sum(1 for row in review_rows if row.get("status") == "Ready")
+    sendable = sum(1 for row in review_rows if row.get("sendability_decision") == "Send")
+    edit_needed = sum(1 for row in review_rows if row.get("sendability_decision") == "Edit")
+    reject_needed = sum(1 for row in review_rows if row.get("sendability_decision") == "Reject")
     generated = sum(
         1
         for row in review_rows
@@ -363,6 +390,9 @@ def _summary_rows(review_rows: list[dict[str, Any]], research_rows: list[dict[st
         {"metric": "Unique companies", "value": str(unique_companies)},
         {"metric": "Rows with personalized line", "value": str(generated)},
         {"metric": "Rows ready to send", "value": str(ready)},
+        {"metric": "Sendability: Send", "value": str(sendable)},
+        {"metric": "Sendability: Edit", "value": str(edit_needed)},
+        {"metric": "Sendability: Reject", "value": str(reject_needed)},
         {"metric": "Rows needing review", "value": str(review_needed)},
         {"metric": "Research-only rows", "value": str(research_only)},
         {"metric": "Rows with source URLs", "value": str(sources)},
@@ -590,6 +620,9 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
     ready = sum(1 for row in review_rows if row.get("status") == "Ready")
     review = sum(1 for row in review_rows if row.get("status") == "Review")
     research_only = sum(1 for row in review_rows if row.get("status") == "Research only")
+    sendable = sum(1 for row in review_rows if row.get("sendability_decision") == "Send")
+    edit_needed = sum(1 for row in review_rows if row.get("sendability_decision") == "Edit")
+    reject_needed = sum(1 for row in review_rows if row.get("sendability_decision") == "Reject")
     generated = sum(
         1
         for row in review_rows
@@ -610,9 +643,9 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
     ws["B3"].alignment = Alignment(horizontal="left", vertical="top")
 
     _kpi_card(ws, "B6:C8", "Rows", str(total_rows), f"{unique_companies} unique companies", ACCENT_BLUE)
-    _kpi_card(ws, "E6:F8", "Ready", str(ready), f"{ready_rate}% of rows ready", ACCENT_GREEN)
-    _kpi_card(ws, "H6:I8", "Needs Review", str(review), "Light edit or manual check", ACCENT_ORANGE)
-    _kpi_card(ws, "K6:L8", "Research Only", str(research_only), "No sendable AI line", ACCENT_RED)
+    _kpi_card(ws, "E6:F8", "Send", str(sendable), "Passes sendability gate", ACCENT_GREEN)
+    _kpi_card(ws, "H6:I8", "Edit", str(edit_needed), "Needs light human edit", ACCENT_ORANGE)
+    _kpi_card(ws, "K6:L8", "Reject", str(reject_needed), "Do not send yet", ACCENT_RED)
     _kpi_card(ws, "B10:C12", "Generated Lines", str(generated), "Rows with personalization", ACCENT_PURPLE)
     _kpi_card(ws, "E10:F12", "Source Coverage", str(sources), "Rows with source URLs", ACCENT_BLUE)
     _kpi_card(ws, "H10:I12", "Avg QC", str(avg_quality or "-"), "Personalization quality score", ACCENT_YELLOW)
@@ -623,6 +656,12 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
     status_rows = [(label, count) for label, count in Counter(row.get("status", "") for row in review_rows).items() if label]
     status_order = {"Ready": 0, "Review": 1, "Research only": 2}
     status_rows = sorted(status_rows, key=lambda item: status_order.get(item[0], 9))
+    sendability_rows = [
+        ("Send", sendable),
+        ("Edit", edit_needed),
+        ("Reject", reject_needed),
+    ]
+    sendability_rows = [row for row in sendability_rows if row[1] > 0]
     confidence_rows = [
         ("High", visual_conf_counts.get("high", 0)),
         ("Medium", visual_conf_counts.get("medium", 0)),
@@ -634,9 +673,10 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
     visual_flag_rows = _top_counts(review_rows, "visual_flags", limit=8, split=True)
     outcome_rows = _top_counts(review_rows, "conversion_outcome", limit=8)
     review_reason_rows = _top_counts(review_rows, "quality_flags", limit=8, split=True)
+    sendability_reason_rows = _top_counts(review_rows, "sendability_reasons", limit=8, split=True)
 
-    _section_title(ws, "B15", "Batch Health", "How much is ready versus still needing review.")
-    _write_metric_bars(ws, 17, 2, "Status distribution", status_rows or [("No rows", 0)], "status", ACCENT_GREEN)
+    _section_title(ws, "B15", "Sendability Gate", "Rows are separated into send, edit, and reject before delivery.")
+    _write_metric_bars(ws, 17, 2, "Sendability distribution", sendability_rows or [("No rows", 0)], "decision", ACCENT_GREEN)
 
     _section_title(ws, "H15", "Visual Confidence", "Reliability of automated visual findings.")
     _write_metric_bars(ws, 17, 8, "Visual confidence", confidence_rows or [("None", 0)], "confidence", ACCENT_BLUE)
@@ -651,7 +691,7 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
     _write_metric_bars(ws, 45, 2, "Top visual flags", visual_flag_rows or [("No visual flags", 0)], "flag", ACCENT_YELLOW)
 
     _section_title(ws, "H43", "Review Queue", "Main reasons rows still need human attention.")
-    _write_metric_bars(ws, 45, 8, "Top quality flags", review_reason_rows or [("No quality flags", 0)], "flag", ACCENT_RED)
+    _write_metric_bars(ws, 45, 8, "Sendability reasons", sendability_reason_rows or review_reason_rows or [("No quality flags", 0)], "reason", ACCENT_RED)
 
     for row in ws.iter_rows(min_row=15, max_row=54, min_col=2, max_col=12):
         for cell in row:
@@ -672,9 +712,9 @@ def _write_readable_xlsx(rows: list[dict[str, Any]], output_path: Path) -> None:
     _write_sheet(ws, CLIENT_REVIEW_COLUMNS, review_rows)
     _style_sheet(
         ws,
-        [14, 22, 20, 72, 78, 24, 24, 24, 28, 26, 64, 28, 18, 72, 52, 16, 26, 56, 24, 30, 48],
+        [14, 14, 12, 48, 16, 70, 22, 42, 22, 20, 72, 78, 24, 24, 24, 28, 26, 64, 28, 18, 72, 52, 16, 26, 56, 24, 30, 48],
         row_height=88,
-        freeze="D2",
+        freeze="K2",
     )
     _style_review_status(ws)
 

@@ -23,6 +23,12 @@ from google_sheets import (
     read_public_sheet,
 )
 from run_history import append_run_history, load_run_history
+from sendability import (
+    EDIT_REASON_CATEGORIES,
+    HUMAN_DECISIONS,
+    append_goldset_feedback,
+    apply_sendability_to_dataframe,
+)
 from tone_preset_library import get_preset_profile, preset_options
 from tone_profiles import available_tone_profiles, load_tone_profile
 
@@ -33,6 +39,8 @@ RUN_OUTPUT_DIR = OUTPUT_DIR / "ui_runs"
 CUSTOM_PROFILE_DIR = DATA_DIR / "custom_tone_profiles"
 SAMPLE_INPUT_PATH = DATA_DIR / "input" / "sample_companies.csv"
 DELIVERY_COLUMNS = [
+    "sendability_decision",
+    "human_decision",
     "company",
     "person",
     "role",
@@ -152,8 +160,16 @@ def _custom_profile_path(
 def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     review_rows, _ = _client_rows(rows)
     df = pd.DataFrame(review_rows, columns=CLIENT_REVIEW_COLUMNS)
+    df = apply_sendability_to_dataframe(df)
     ordered = [
         "status",
+        "sendability_decision",
+        "sendability_score",
+        "sendability_reasons",
+        "human_decision",
+        "edited_line",
+        "edit_reason_category",
+        "edit_notes",
         "company",
         "person",
         "role",
@@ -185,10 +201,17 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 
 def _delivery_df(df: pd.DataFrame) -> pd.DataFrame:
+    prepared = df.copy()
+    if "human_decision" in prepared and "edited_line" in prepared and "personalized_line" in prepared:
+        use_edit = (
+            prepared["human_decision"].fillna("").astype(str).str.lower().isin({"send", "edit"})
+            & prepared["edited_line"].fillna("").astype(str).str.strip().ne("")
+        )
+        prepared.loc[use_edit, "personalized_line"] = prepared.loc[use_edit, "edited_line"]
     columns = [column for column in DELIVERY_COLUMNS if column in df.columns]
-    delivery = df[columns].copy()
-    if "status" in df.columns:
-        delivery.insert(0, "status", df["status"])
+    delivery = prepared[columns].copy()
+    if "status" in prepared.columns:
+        delivery.insert(0, "status", prepared["status"])
     return delivery
 
 
@@ -197,6 +220,9 @@ def _batch_summary(df: pd.DataFrame, cost: CostEstimate | None, output_path: Pat
     ready = _count_status(df, "Ready")
     review = _count_status(df, "Review")
     research_only = _count_status(df, "Research only")
+    sendable = int((df["sendability_decision"] == "Send").sum()) if "sendability_decision" in df else 0
+    editable = int((df["sendability_decision"] == "Edit").sum()) if "sendability_decision" in df else 0
+    rejected = int((df["sendability_decision"] == "Reject").sum()) if "sendability_decision" in df else 0
     unique_companies = df["company"].nunique() if "company" in df else 0
     return {
         "input_file": str(input_path),
@@ -206,6 +232,9 @@ def _batch_summary(df: pd.DataFrame, cost: CostEstimate | None, output_path: Pat
         "ready_rows": ready,
         "review_rows": review,
         "research_only_rows": research_only,
+        "sendability_send_rows": sendable,
+        "sendability_edit_rows": editable,
+        "sendability_reject_rows": rejected,
         "ready_rate": round(ready / total * 100, 1) if total else 0,
         "provider": provider,
         "model": model_name,
@@ -222,26 +251,24 @@ def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Review")
         worksheet = writer.book["Review"]
-        widths = {
-            "A": 14,
-            "B": 24,
-            "C": 22,
-            "D": 24,
-            "E": 34,
-            "F": 76,
-            "G": 84,
-            "H": 84,
-            "I": 32,
-            "J": 18,
-            "K": 68,
-            "L": 24,
-            "M": 24,
-            "N": 24,
-            "O": 18,
-            "P": 18,
+        width_by_name = {
+            "personalized_line": 72,
+            "edited_line": 72,
+            "template_preview": 84,
+            "evidence_found": 84,
+            "reviewer_notes": 66,
+            "sendability_reasons": 52,
+            "edit_notes": 52,
+            "quality_flags": 42,
+            "visual_confidence_reasons": 46,
+            "source_urls": 48,
+            "screenshots": 46,
+            "shareable_screenshots": 46,
+            "trace_files": 46,
         }
-        for col, width in widths.items():
-            worksheet.column_dimensions[col].width = width
+        for idx, column_name in enumerate(df.columns, 1):
+            width = width_by_name.get(str(column_name), 22)
+            worksheet.column_dimensions[worksheet.cell(1, idx).column_letter].width = width
         for row in worksheet.iter_rows():
             for cell in row:
                 cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
@@ -419,14 +446,18 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
     review = _count_status(df, "Review")
     research_only = _count_status(df, "Research only")
     generated = int((df["personalized_line"].fillna("").astype(str).str.len() > 0).sum()) if "personalized_line" in df else 0
+    sendable = int((df["sendability_decision"] == "Send").sum()) if "sendability_decision" in df else 0
+    editable = int((df["sendability_decision"] == "Edit").sum()) if "sendability_decision" in df else 0
+    rejected = int((df["sendability_decision"] == "Reject").sum()) if "sendability_decision" in df else 0
 
     st.subheader("Batch dashboard")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Rows", total, f"{unique_companies} unique companies")
-    c2.metric("Ready", ready, f"{round(ready / total * 100) if total else 0}%")
-    c3.metric("Needs review", review)
-    c4.metric("Research only", research_only)
+    c2.metric("Send", sendable, f"{round(sendable / total * 100) if total else 0}%")
+    c3.metric("Edit", editable)
+    c4.metric("Reject", rejected)
     c5.metric("Generated", generated)
+    st.caption(f"Status layer: {ready} Ready, {review} Review, {research_only} Research only. Sendability is the stricter client-delivery gate.")
 
     if cost:
         k1, k2, k3, k4 = st.columns(4)
@@ -437,6 +468,15 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
 
     left, right = st.columns(2, gap="large")
     with left:
+        sendability_counts = (
+            df["sendability_decision"].fillna("Unknown").replace("", "Unknown").value_counts().rename_axis("decision").reset_index(name="rows")
+            if "sendability_decision" in df
+            else pd.DataFrame()
+        )
+        if not sendability_counts.empty:
+            st.markdown("**Sendability gate**")
+            st.bar_chart(sendability_counts.set_index("decision"))
+
         status_counts = df["status"].value_counts().rename_axis("status").reset_index(name="rows") if "status" in df else pd.DataFrame()
         if not status_counts.empty:
             st.markdown("**Status distribution**")
@@ -448,6 +488,11 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
             st.bar_chart(flags.set_index("label"))
 
     with right:
+        sendability_reasons = _top_split_counts(df, "sendability_reasons", 8)
+        if not sendability_reasons.empty:
+            st.markdown("**Top sendability reasons**")
+            st.bar_chart(sendability_reasons.set_index("label"))
+
         visual_counts = (
             df["visual_confidence"].fillna("none").replace("", "none").value_counts().rename_axis("visual_confidence").reset_index(name="rows")
             if "visual_confidence" in df
@@ -462,10 +507,27 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
             st.markdown("**Friction types found**")
             st.bar_chart(friction_counts.head(8).set_index("friction_type"))
 
-    review_cols = [col for col in ["company", "person", "personalized_line", "quality_flags", "visual_confidence", "reviewer_notes"] if col in df]
+    review_cols = [
+        col
+        for col in [
+            "sendability_decision",
+            "sendability_score",
+            "company",
+            "person",
+            "personalized_line",
+            "sendability_reasons",
+            "quality_flags",
+            "visual_confidence",
+            "reviewer_notes",
+        ]
+        if col in df
+    ]
     st.markdown("**Review queue**")
     if review_cols:
-        queue = df[df["status"].isin(["Review", "Research only"])] if "status" in df else df
+        if "sendability_decision" in df:
+            queue = df[df["sendability_decision"].isin(["Edit", "Reject"])]
+        else:
+            queue = df[df["status"].isin(["Review", "Research only"])] if "status" in df else df
         st.dataframe(queue[review_cols], use_container_width=True, height=300)
 
 
@@ -481,11 +543,12 @@ def _how_it_works_panel() -> None:
             <span class="ux-badge">5 Tone profile</span>
             <span class="ux-badge">6 Draft line</span>
             <span class="ux-badge">7 QC</span>
-            <span class="ux-badge">8 Human review</span>
+            <span class="ux-badge">8 Sendability gate</span>
+            <span class="ux-badge">9 Human review</span>
             <p class="ux-muted" style="margin-top:12px;">
             The system does not start by asking a model to write a clever opener. It first gathers public evidence,
             selects a current friction point or proof gap, then writes a short line that can be checked against the source.
-            Rows with weak evidence, low visual confidence, or uncertain claims stay in the review queue.
+            Rows with weak evidence, low visual confidence, or uncertain claims are separated into Send, Edit or Reject.
             </p>
         </div>
         """,
@@ -500,7 +563,7 @@ def _how_it_works_panel() -> None:
         st.write("Broken formatting, unclear CTA, onboarding friction, booking/signup friction, weak proof and broad positioning.")
     with col3:
         st.markdown("**Review logic**")
-        st.write("No em dashes, no generic praise, no unsupported claims, no blog-post filler, and manual review when evidence is weak.")
+        st.write("No em dashes, no generic praise, no unsupported claims, no blog-post filler, and a goldset of human edits for future tuning.")
 
 
 def _tone_calibration_panel() -> None:
@@ -538,6 +601,9 @@ def _history_panel() -> None:
             "ready_rows",
             "review_rows",
             "research_only_rows",
+            "sendability_send_rows",
+            "sendability_edit_rows",
+            "sendability_reject_rows",
             "ready_rate",
             "estimated_cost_usd",
             "provider",
@@ -555,7 +621,7 @@ def _history_panel() -> None:
         with c1:
             if st.button("Load review sheet into app", use_container_width=True):
                 try:
-                    st.session_state["review_df"] = pd.read_excel(selected, sheet_name="Review").fillna("")
+                    st.session_state["review_df"] = apply_sendability_to_dataframe(pd.read_excel(selected, sheet_name="Review").fillna(""))
                     st.session_state["output_path"] = selected
                     st.success("Previous run loaded into Review & Edit.")
                 except Exception as exc:
@@ -711,10 +777,11 @@ def main() -> None:
                     <span class="ux-badge">4 Tone profile</span>
                     <span class="ux-badge">5 Copy</span>
                     <span class="ux-badge">6 QC</span>
-                    <span class="ux-badge">7 Review</span>
-                    <span class="ux-badge">8 Export</span>
+                    <span class="ux-badge">7 Sendability</span>
+                    <span class="ux-badge">8 Review</span>
+                    <span class="ux-badge">9 Export</span>
                     <p class="ux-muted" style="margin-top:12px;">
-                    Weak evidence remains visible. Visual bug confidence and review flags help decide what needs manual checking.
+                    Weak evidence remains visible. Sendability, visual confidence and review flags decide what needs checking before delivery.
                     </p>
                 </div>
                 """,
@@ -731,13 +798,30 @@ def main() -> None:
             df = st.session_state["review_df"].copy()
             filters = df["status"].dropna().unique().tolist() if "status" in df else []
             status_filter = st.multiselect("Filter status", sorted(filters), default=sorted(filters))
+            decision_options = df["sendability_decision"].dropna().unique().tolist() if "sendability_decision" in df else []
+            decision_filter = st.multiselect(
+                "Filter sendability",
+                sorted(decision_options),
+                default=sorted(decision_options),
+            )
             filtered = df[df["status"].isin(status_filter)] if status_filter and "status" in df else df
+            if decision_filter and "sendability_decision" in filtered:
+                filtered = filtered[filtered["sendability_decision"].isin(decision_filter)]
+            st.caption("Use `human_decision`, `edited_line`, and `edit_reason_category` to turn reviewed rows into a reusable goldset.")
             edited = st.data_editor(
                 filtered,
                 use_container_width=True,
                 height=650,
                 num_rows="fixed",
+                disabled=["sendability_decision", "sendability_score", "sendability_reasons"],
                 column_config={
+                    "sendability_decision": st.column_config.TextColumn("sendability_decision", width="small"),
+                    "sendability_score": st.column_config.NumberColumn("sendability_score", width="small"),
+                    "sendability_reasons": st.column_config.TextColumn("sendability_reasons", width="large"),
+                    "human_decision": st.column_config.SelectboxColumn("human_decision", options=HUMAN_DECISIONS),
+                    "edited_line": st.column_config.TextColumn("edited_line", width="large"),
+                    "edit_reason_category": st.column_config.SelectboxColumn("edit_reason_category", options=EDIT_REASON_CATEGORIES),
+                    "edit_notes": st.column_config.TextColumn("edit_notes", width="large"),
                     "personalized_line": st.column_config.TextColumn("personalized_line", width="large"),
                     "template_preview": st.column_config.TextColumn("template_preview", width="large"),
                     "evidence_found": st.column_config.TextColumn("evidence_found", width="large"),
@@ -750,8 +834,25 @@ def main() -> None:
             if st.button("Save visible edits", use_container_width=True):
                 updated = df.copy()
                 updated.loc[edited.index, edited.columns] = edited
-                st.session_state["review_df"] = updated
+                st.session_state["review_df"] = apply_sendability_to_dataframe(updated)
                 st.success("Edits saved in this session.")
+            c1, c2 = st.columns(2)
+            if c1.button("Apply edited lines to personalization", use_container_width=True):
+                updated = st.session_state["review_df"].copy()
+                if {"human_decision", "edited_line", "personalized_line"}.issubset(updated.columns):
+                    mask = (
+                        updated["human_decision"].fillna("").astype(str).str.lower().isin({"send", "edit"})
+                        & updated["edited_line"].fillna("").astype(str).str.strip().ne("")
+                    )
+                    updated.loc[mask, "personalized_line"] = updated.loc[mask, "edited_line"]
+                    st.session_state["review_df"] = apply_sendability_to_dataframe(updated)
+                    st.success(f"Applied edited lines to {int(mask.sum())} rows.")
+            if c2.button("Save reviewed rows to goldset", use_container_width=True):
+                path, count = append_goldset_feedback(st.session_state["review_df"])
+                if count:
+                    st.success(f"Saved {count} reviewed rows to {path}")
+                else:
+                    st.info("No reviewed rows yet. Set human_decision to send, edit, or reject first.")
 
     with export_tab:
         if "review_df" not in st.session_state:
@@ -791,6 +892,15 @@ def main() -> None:
 
             st.markdown("**Client delivery export**")
             delivery = _delivery_df(df)
+            delivery_filter = st.radio(
+                "Rows for client delivery",
+                ["All rows", "Sendability: Send only", "Human-approved send/edit only"],
+                horizontal=True,
+            )
+            if delivery_filter == "Sendability: Send only" and "sendability_decision" in delivery:
+                delivery = delivery[delivery["sendability_decision"] == "Send"]
+            elif delivery_filter == "Human-approved send/edit only" and "human_decision" in delivery:
+                delivery = delivery[delivery["human_decision"].fillna("").astype(str).str.lower().isin({"send", "edit"})]
             delivery_columns = st.multiselect(
                 "Columns for client delivery",
                 delivery.columns.tolist(),
@@ -828,6 +938,19 @@ def main() -> None:
                     finally:
                         if credential_path and credential_path.exists():
                             credential_path.unlink(missing_ok=True)
+
+            with st.expander("Goldset export for future tuning"):
+                goldset_path, _ = append_goldset_feedback(pd.DataFrame())
+                if goldset_path.exists():
+                    st.download_button(
+                        "Download saved human edits goldset",
+                        goldset_path.read_bytes(),
+                        goldset_path.name,
+                        "text/csv",
+                        use_container_width=True,
+                    )
+                else:
+                    st.caption("No saved goldset yet. Review rows first, then click `Save reviewed rows to goldset`.")
 
     with calibration_tab:
         _tone_calibration_panel()

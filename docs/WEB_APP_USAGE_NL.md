@@ -29,9 +29,11 @@ De launcher kiest automatisch `localhost:8501`, of de volgende vrije poort als 8
 5. Maak optioneel een klant-specifiek tone profile.
 6. Klik op `Run batch`.
 7. Volg de voortgang via de laadbalk.
-8. Bekijk het dashboard voor review workload, visual confidence, friction types, quality flags en kosteninschatting.
+8. Bekijk het dashboard voor sendability, review workload, visual confidence, friction types, quality flags en kosteninschatting.
 9. Review en edit de rows in de `Review & Edit` tab.
-10. Exporteer als CSV, XLSX, full workbook, client delivery export of naar Google Sheets.
+10. Zet per rij eventueel `human_decision`, `edited_line`, `edit_reason_category` en `edit_notes`.
+11. Sla goede/mislukte menselijke edits optioneel op als goldset.
+12. Exporteer als CSV, XLSX, full workbook, client delivery export of naar Google Sheets.
 
 ## Demo mode
 
@@ -44,6 +46,33 @@ Elke run wordt lokaal opgeslagen in de history met datum, aantal rows, ready/rev
 ## Tone calibration
 
 In `Tone Calibration` kun je feedback van een klant plakken, goede en slechte voorbeelden toevoegen en daar een nieuw client-specific profile van maken. Dit profile verschijnt daarna in de tone dropdown.
+
+## Sendability gate
+
+De app maakt nu onderscheid tussen gewone status en sendability:
+
+- `Send`: sterk genoeg om mee te nemen in client delivery.
+- `Edit`: bruikbaar uitgangspunt, maar eerst handmatig aanscherpen.
+- `Reject`: niet versturen, want bewijs of copy is nog niet betrouwbaar genoeg.
+
+De gate let onder andere op unsupported claims, em dashes, genericness, technische audit-taal, verkeerde surface, te lange zinnen, ontbrekende outcome-link en lage visual confidence.
+
+## Human edit goldset
+
+In `Review & Edit` kun je per rij aangeven wat jij als mens beslist:
+
+- `human_decision`
+- `edited_line`
+- `edit_reason_category`
+- `edit_notes`
+
+Klik daarna op `Save reviewed rows to goldset`. De app bewaart die voorbeelden lokaal in:
+
+```text
+data/goldset/human_edits.csv
+```
+
+Die goldset kun je later gebruiken om de tone profiles, prompts of modelkeuze te verbeteren.
 
 ## Google Sheets
 
