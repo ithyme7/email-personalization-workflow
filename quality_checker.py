@@ -5,7 +5,7 @@ from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, To
 from evidence_extractor import evidence_to_payload
 
 
-def _local_flags(draft: PersonalizationDraft) -> list[str]:
+def _local_flags(draft: PersonalizationDraft, evidence: EvidenceResult | None = None) -> list[str]:
     text = f"{draft.opening_line} {draft.tailored_insight}"
     line_lower = draft.opening_line.lower()
     text_lower = text.lower()
@@ -92,6 +92,38 @@ def _local_flags(draft: PersonalizationDraft) -> list[str]:
         marker in line_lower for marker in friction_markers
     ):
         flags.append("missing_visible_friction")
+    technical_terms = [
+        "contrast ratio",
+        "tap target",
+        "horizontal overflow",
+        "wcag",
+        "axe-core",
+        "lighthouse",
+        "validator",
+        "accessibility violation",
+    ]
+    if any(term in line_lower for term in technical_terms):
+        flags.append("technical_audit_language")
+    if evidence:
+        evidence_text = " ".join(
+            f"{fact.fact} {fact.surface_checked} {fact.why_it_matters}" for fact in evidence.facts
+        ).lower()
+        app_evidence = any(
+            marker in evidence_text
+            for marker in [
+                "app listing",
+                "app onboarding",
+                "app store",
+                "google play",
+                "review complaint",
+                "paywall",
+                "access code",
+                "subscription",
+                "first screen",
+            ]
+        )
+        if app_evidence and ("website" in line_lower or "blog" in line_lower) and "app" not in line_lower:
+            flags.append("wrong_surface")
     return flags
 
 
@@ -130,7 +162,7 @@ def check_quality(
         },
         "tone_profile": tone_profile.to_prompt_payload() if tone_profile else {},
     }
-    local_flags = _local_flags(draft)
+    local_flags = _local_flags(draft, evidence)
     try:
         raw = client.complete_json(prompt, payload)
     except LLMError as exc:

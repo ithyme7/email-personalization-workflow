@@ -15,6 +15,8 @@ Check whether the draft follows the client's standard:
 - Flows naturally into the required next sentence in email_template_context.
 - Reads like a mini hypothesis from someone who checked the app/page, not like a generic growth suggestion.
 - Prioritizes the configured issue types when supported by evidence: broken formatting, low-visibility CTA, unnecessary onboarding clicks, hidden signup/login options, checkout friction, weak proof/testimonials, weak case studies, or broad positioning.
+- If the evidence indicates an app-first product, prioritizes app/onboarding, app listing, screenshot, review complaint, signup, paywall, subscription, permission, or access-code evidence over blog or generic website observations.
+- Uses UX validator findings as support only, not as audit-report wording. Technical phrases like contrast ratio, tap target, horizontal overflow, WCAG, axe-core, Lighthouse, or validator should usually fail tone unless they are hidden in evidence, not copy.
 - Does not use a blog post as the angle unless the blog directly reveals a positioning, onboarding, conversion, or proof issue.
 - Contains no generic praise.
 - Contains no em dash.
@@ -51,6 +53,8 @@ Mandatory flags:
 - Include "broad_positioning_not_explained" if it says positioning is broad without naming the audience/use-case spread or why it affects conversion.
 - Include "better_priority_angle_available" if the evidence includes broken formatting, CTA, onboarding, weak proof, or broad positioning but the draft chose a weaker angle.
 - Include "wrong_surface" if it talks about the website when the evidence clearly shows the app is the main product.
+- Include "wrong_surface" if the line uses a blog/site angle while specific app/onboarding/listing/review/screenshot evidence was available for an app-first product.
+- Include "technical_audit_language" if the line sounds like an audit report rather than a human observation, especially phrases such as contrast ratio, tap target, horizontal overflow, WCAG, axe-core, Lighthouse, validator, or accessibility violation.
 - Include "multiple_insights" if it stacks more than one observation into the opening line.
 - Include "manual_review_needed" if the best claim depends on weak, unverified, blocked, or unsourced manual evidence.
 - Include "low_confidence_visual_finding" if the line relies on a low-confidence automated visual observation as though it were confirmed.

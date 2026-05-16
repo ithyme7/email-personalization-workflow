@@ -167,11 +167,18 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "friction_type",
         "surface_checked",
         "conversion_outcome",
+        "product_surface_type",
+        "research_priority",
         "visual_confidence",
         "visual_confidence_score",
         "visual_confidence_reasons",
         "visual_flags",
         "screenshots",
+        "shareable_screenshots",
+        "trace_files",
+        "ux_validator_findings",
+        "advanced_detector_flags",
+        "dead_link_checks",
         "source_urls",
     ]
     return df[[col for col in ordered if col in df.columns]]
@@ -750,6 +757,15 @@ def main() -> None:
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
+                package_path = Path(output_path).with_name(f"{Path(output_path).stem}_delivery_package.zip")
+                if package_path.exists():
+                    st.download_button(
+                        "Download workbook + screenshot package",
+                        package_path.read_bytes(),
+                        package_path.name,
+                        "application/zip",
+                        use_container_width=True,
+                    )
 
             st.markdown("**Client delivery export**")
             delivery = _delivery_df(df)

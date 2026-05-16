@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -16,6 +16,27 @@ from models import DeepResearchResult, LeadInput
 
 APP_STORE_DOMAINS = ("apps.apple.com", "play.google.com")
 MAX_APP_STORE_TEXT_CHARS = 2200
+MAX_REVIEW_COMPLAINTS = 4
+COMPLAINT_TERMS = {
+    "crash",
+    "bug",
+    "broken",
+    "can't",
+    "cannot",
+    "login",
+    "sign in",
+    "signup",
+    "subscription",
+    "paywall",
+    "payment",
+    "slow",
+    "stuck",
+    "confusing",
+    "doesn't work",
+    "not working",
+    "access code",
+    "permission",
+}
 
 
 def _cache_path(url: str) -> Path:
@@ -81,6 +102,49 @@ def _discover_app_store_links(lead: LeadInput, settings: Settings) -> list[str]:
     return links[:2]
 
 
+def _apple_app_id(url: str) -> str:
+    match = re.search(r"/id([0-9]+)", url)
+    return match.group(1) if match else ""
+
+
+def _fetch_apple_review_complaints(app_store_url: str, settings: Settings) -> list[str]:
+    app_id = _apple_app_id(app_store_url)
+    if not app_id:
+        return []
+    parsed = urlparse(app_store_url)
+    country_match = re.search(r"apps\.apple\.com/([a-z]{2})/", parsed.netloc + parsed.path)
+    country = country_match.group(1) if country_match else "us"
+    rss_url = f"https://itunes.apple.com/{country}/rss/customerreviews/id={app_id}/sortBy=mostRecent/json"
+    try:
+        response = requests.get(
+            rss_url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)"},
+            timeout=settings.request_timeout_seconds,
+        )
+        if response.status_code >= 400:
+            return []
+        data = response.json()
+    except (requests.RequestException, ValueError):
+        return []
+    entries = data.get("feed", {}).get("entry", [])
+    if isinstance(entries, dict):
+        entries = [entries]
+    complaints: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or "im:name" in entry:
+            continue
+        title = entry.get("title", {}).get("label", "")
+        content = entry.get("content", {}).get("label", "")
+        rating = entry.get("im:rating", {}).get("label", "")
+        text = f"{title}: {content}".strip(": ")
+        lower = text.lower()
+        if text and (rating in {"1", "2", "3"} or any(term in lower for term in COMPLAINT_TERMS)):
+            complaints.append(f"Apple review ({rating or 'unknown'} stars): {text[:260]}")
+        if len(complaints) >= MAX_REVIEW_COMPLAINTS:
+            break
+    return complaints
+
+
 def _build_friction_checklist(lead: LeadInput, app_store_summary: str) -> list[str]:
     combined = " ".join(
         [
@@ -143,8 +207,19 @@ def collect_deep_research(lead: LeadInput, settings: Settings) -> DeepResearchRe
         if not result.app_store_url:
             result.app_store_url = url
         app_summaries.append(f"Source: {url}\nTitle: {title}\nText: {text[:1000]}")
+        if "apps.apple.com" in url:
+            complaints = _fetch_apple_review_complaints(url, settings)
+            if complaints:
+                result.review_complaints.extend(complaints)
+                result.source_urls.append(f"Apple public customer reviews for {url}")
 
     result.app_store_summary = "\n\n".join(app_summaries)
+    if result.review_complaints:
+        result.app_store_summary = (
+            result.app_store_summary
+            + "\n\nPublic review complaint signals:\n"
+            + "\n".join(f"- {complaint}" for complaint in result.review_complaints)
+        ).strip()
     result.friction_checklist = _build_friction_checklist(lead, result.app_store_summary)
 
     return result

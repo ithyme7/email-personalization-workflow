@@ -17,11 +17,17 @@ In a recent app project, session replays showed users bouncing off a paywall bec
 The opening line must prime the reader for drop-off, activation, bookings, signup completion, churn, paywall friction, retention, or conversion. It should feel like the sender actually checked the app or page.
 
 Angle priority:
-1. Broken formatting on website/app, especially mobile formatting issues.
-2. Conversion best-practice issues: hard-to-see CTA, unclear primary action, unnecessary clicks in onboarding, hidden signup/login options, checkout friction, or too many steps before value.
-3. Weak testimonials or case studies without direct evidence, screenshots, quotes, or proof.
-4. Broad positioning where the product is trying to serve too many audiences/use cases and a narrower niche may convert better.
-5. Blog post angles are usually weak. Use a blog only if it directly exposes a positioning/onboarding/conversion issue and no stronger surface exists.
+1. If there is a mobile app, app/onboarding evidence beats blog and generic website observations. Prefer App Store or Google Play listing, screenshots, review complaints, onboarding permissions, signup requirement, paywall/subscription/access-code, then website/landing page.
+2. Broken formatting on website/app, especially mobile formatting issues.
+3. Conversion best-practice issues: hard-to-see CTA, unclear primary action, unnecessary clicks in onboarding, hidden signup/login options, checkout friction, or too many steps before value.
+4. Weak testimonials or case studies without direct evidence, screenshots, quotes, or proof.
+5. Broad positioning where the product is trying to serve too many audiences/use cases and a narrower niche may convert better.
+6. Blog post angles are usually weak. Use a blog only if it directly exposes a positioning/onboarding/conversion issue and no stronger app/page surface exists.
+
+UX validator rule:
+- Internal detector language is not customer-facing copy. You may use evidence such as low CTA contrast, small tap target, horizontal overflow, CTA below fold, or broken link to understand the issue.
+- Translate it into natural language: "the main CTA was easy to miss", "the mobile page formatting looked broken", "the signup option was buried", or "the link did not seem to lead anywhere useful."
+- Do not write technical audit language such as "contrast ratio", "tap target", "horizontal overflow", "WCAG", "axe-core", "Lighthouse", or "validator".
 
 Opening line rules:
 - One sentence only.
@@ -42,6 +48,7 @@ Opening line rules:
 - Must feel written for this specific company or person.
 - If recipient role is relevant, lightly tailor the line to that role without forcing it.
 - Prefer the strongest evidence in this order: actual app/onboarding observation, concrete bug/friction point, public app-store/app listing detail, website flow detail, person-level LinkedIn observation supplied by reviewer, recent product/news note, competitor/context note.
+- For app-first products, prefer app/onboarding and app-store/review/screenshot evidence over blog/site observations unless the site has a clearer current conversion bug.
 - Override that order when the evidence contains one of the client's priority issues: broken formatting, CTA visibility, unnecessary clicks, weak proof, or broad positioning.
 - Suitable as the first line of a cold email.
 - Do not stack multiple observations. One surface, one friction point, one outcome hypothesis.

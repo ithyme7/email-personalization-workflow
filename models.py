@@ -31,6 +31,9 @@ OUTPUT_COLUMNS = [
     "friction_checklist",
     "app_check_status",
     "recommended_manual_check",
+    "product_surface_type",
+    "research_priority",
+    "app_review_complaints",
     "template_preview",
     "visual_observations",
     "visual_quality_flags",
@@ -38,6 +41,11 @@ OUTPUT_COLUMNS = [
     "visual_confidence_score",
     "visual_confidence_reasons",
     "screenshot_paths",
+    "shareable_screenshot_files",
+    "trace_files",
+    "advanced_detector_flags",
+    "ux_validator_findings",
+    "dead_link_checks",
     "friction_type",
     "surface_checked",
     "conversion_outcome",
@@ -128,6 +136,7 @@ class DeepResearchResult:
     recent_news_note: str = ""
     competitor_context: str = ""
     friction_checklist: list[str] = field(default_factory=list)
+    review_complaints: list[str] = field(default_factory=list)
     source_urls: list[str] = field(default_factory=list)
     reviewer_notes: list[str] = field(default_factory=list)
 
@@ -153,6 +162,8 @@ class DeepResearchResult:
             sections.append(f"Competitor/context note supplied by reviewer: {self.competitor_context}")
         if self.friction_checklist:
             sections.append("Friction checklist: " + " | ".join(self.friction_checklist))
+        if self.review_complaints:
+            sections.append("Public review complaint signals: " + " | ".join(self.review_complaints))
         return "\n".join(sections)
 
 
@@ -174,6 +185,10 @@ class ResearchResult:
     visual_confidence_score: int = 0
     visual_confidence_reasons: list[str] = field(default_factory=list)
     screenshot_paths: list[str] = field(default_factory=list)
+    trace_files: list[str] = field(default_factory=list)
+    advanced_detector_flags: list[str] = field(default_factory=list)
+    ux_validator_findings: list[str] = field(default_factory=list)
+    dead_link_checks: list[str] = field(default_factory=list)
     needs_manual_review: bool = False
     reviewer_notes: list[str] = field(default_factory=list)
 

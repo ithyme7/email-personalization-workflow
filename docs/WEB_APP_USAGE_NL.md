@@ -64,3 +64,42 @@ Controleer provider pricing altijd voordat je marge of klantprijs bepaalt.
 Zonder API key draait de app nog steeds als research/review workflow, maar worden er geen nieuwe AI-personalized lines gegenereerd.
 
 Custom prompts worden gebruikt als tone guidance binnen de evidence-first regels. Ze mogen dus geen unsupported claims of hallucinations forceren.
+
+## Nieuwe app-first research regel
+
+Als de tool een mobiele app detecteert, krijgt app/onboarding voorrang boven blogs of algemene site-observaties.
+
+Volgorde:
+
+1. App Store / Google Play listing.
+2. Screenshots.
+3. Publieke review complaints, wanneer beschikbaar.
+4. Onboarding permissions.
+5. Signup requirement.
+6. Paywall, subscription of access-code.
+7. Daarna pas website/landing page.
+
+De tool classificeert leads als `app_first_product`, `website_first_leadgen`, `b2b_service`, `commerce_product_page` of `marketplace_booking_flow`.
+
+## UX validators
+
+De detectors mogen intern dingen vinden zoals contrast, tap targets, horizontal overflow, CTA below fold, broken links, Lighthouse issues of axe-core issues.
+
+Maar de email-copy moet menselijk blijven. Dus niet:
+
+`The CTA has a low contrast ratio.`
+
+Maar wel:
+
+`I was checking the mobile page and the main CTA was easy to miss on first load...`
+
+## Deelbare screenshots
+
+Als screenshots of traces worden gemaakt, komen die naast de output workbook in een assets-map en delivery zip:
+
+```text
+<output_name>_assets/
+<output_name>_delivery_package.zip
+```
+
+Gebruik de zip als je screenshots of visueel bewijs met iemand anders wil delen.

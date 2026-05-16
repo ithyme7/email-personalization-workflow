@@ -25,6 +25,12 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Public website research with `requests` and `BeautifulSoup`.
 - Optional Selenium browser fallback for JavaScript-heavy pages.
 - Desktop and mobile screenshot-based visual review.
+- App-first routing: when a mobile app is detected, app/onboarding evidence is prioritized over blog or generic website observations.
+- Product-surface classification for app-first products, website-first leadgen, B2B services, commerce pages, and marketplace/booking flows.
+- Optional Playwright checks for full-page desktop/mobile screenshots, trace files, visible CTA checks, and dead-link candidates.
+- Optional Lighthouse checks for mobile quality signals when enabled.
+- axe-core accessibility checks through the browser context for high-confidence accessibility/CTA issues.
+- Shareable screenshot/trace assets copied next to the workbook and zipped into a delivery package.
 - Evidence-first prompt chain.
 - Friction-prioritized angle selection.
 - Strict no-em-dash and genericness checks.
@@ -188,9 +194,16 @@ The compiled app will be created under `dist/`.
 The Excel workbook includes:
 
 - `Dashboard`: batch status, review workload, source coverage, visual confidence, friction types, and quality flags.
-- `Review`: the main working tab with the personalized line, template preview, evidence, flags, and manual-review notes.
-- `Research Details`: longer evidence, screenshots, source URLs, visual observations, angle-gate notes, tone profile, and model metadata.
+- `Review`: the main working tab with the personalized line, template preview, evidence, surface type, shareable screenshots, flags, and manual-review notes.
+- `Research Details`: longer evidence, screenshots, source URLs, visual observations, internal UX validator findings, angle-gate notes, tone profile, and model metadata.
 - `Summary`: basic counts and usage notes.
+
+When screenshots or traces are created, the exporter also creates:
+
+- `<output_name>_assets/`
+- `<output_name>_delivery_package.zip`
+
+Use the zip when sharing visual evidence with someone else, because local paths such as `C:\Users\...` are only useful on the machine that generated the run.
 
 ## Productized Service Workflow
 
@@ -215,6 +228,7 @@ Useful internal docs:
 ## Limitations
 
 - Automated visual review is useful for obvious issues, but low-confidence findings should be checked manually.
+- Internal UX validators can flag contrast, tap target, overflow, broken-link, Lighthouse, or axe-core issues, but the final email copy should translate those into natural human observations.
 - App-store and public listing evidence is not the same as a real app walkthrough.
 - LinkedIn should be added through manual notes or publicly accessible data you provide.
 - Some websites block scraping or browser rendering.

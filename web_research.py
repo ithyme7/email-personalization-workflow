@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from advanced_detectors import run_advanced_detectors
 from browser_research import BrowserRenderer, RenderedPage, browser_rendering_enabled, visual_review_enabled
 from config import CACHE_DIR, Settings
 from models import LeadInput, PageText, ResearchResult
@@ -245,6 +246,18 @@ def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
                         + ", ".join(visual.quality_flags)
                         + f" | confidence: {visual.confidence} ({visual.confidence_score}/100)"
                     )
+        advanced = run_advanced_detectors(lead.website_url, lead.company_name, settings)
+        if advanced.findings or advanced.flags:
+            result.advanced_detector_flags = advanced.flags
+            result.ux_validator_findings = advanced.findings
+            result.dead_link_checks = advanced.dead_link_checks
+            result.trace_files = advanced.trace_files
+            result.screenshot_paths = list(dict.fromkeys(result.screenshot_paths + advanced.screenshot_paths))
+            result.reviewer_notes.extend(advanced.reviewer_notes)
+            if advanced.flags:
+                result.reviewer_notes.append(
+                    "Advanced detector found internal UX validation signals: " + ", ".join(advanced.flags[:8])
+                )
     finally:
         if renderer:
             renderer.__exit__(None, None, None)
@@ -270,6 +283,13 @@ def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
             + "\n".join(f"- {reason}" for reason in result.visual_confidence_reasons)
             + "\nScreenshot paths:\n"
             + "\n".join(result.screenshot_paths)
+        )
+    if result.ux_validator_findings or result.dead_link_checks:
+        page_summaries.append(
+            "Internal UX validator evidence. Use these as detection criteria, not as technical wording in copy:\n"
+            + "\n".join(f"- {finding}" for finding in result.ux_validator_findings[:10])
+            + ("\nDead link checks:\n" + "\n".join(f"- {item}" for item in result.dead_link_checks[:10]) if result.dead_link_checks else "")
+            + ("\nTrace files:\n" + "\n".join(result.trace_files[:4]) if result.trace_files else "")
         )
     result.summary = "\n\n".join(page_summaries)
     return result

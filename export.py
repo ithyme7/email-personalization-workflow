@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+import shutil
 from typing import Any
+import zipfile
 
 import pandas as pd
 from openpyxl import Workbook
@@ -23,6 +25,8 @@ CLIENT_REVIEW_COLUMNS = [
     "friction_type",
     "surface_checked",
     "conversion_outcome",
+    "product_surface_type",
+    "research_priority",
     "angle_gate_decision",
     "app_check_status",
     "recommended_manual_check",
@@ -32,6 +36,11 @@ CLIENT_REVIEW_COLUMNS = [
     "visual_confidence_reasons",
     "evidence_found",
     "screenshots",
+    "shareable_screenshots",
+    "trace_files",
+    "ux_validator_findings",
+    "advanced_detector_flags",
+    "dead_link_checks",
     "needs_manual_review",
     "quality_flags",
     "reviewer_notes",
@@ -56,6 +65,9 @@ CLIENT_RESEARCH_COLUMNS = [
     "estimated output tokens",
     "linkedin observation",
     "app flow observation",
+    "product surface type",
+    "research priority",
+    "app review complaints",
     "app check status",
     "recommended manual check",
     "template preview",
@@ -65,6 +77,11 @@ CLIENT_RESEARCH_COLUMNS = [
     "visual confidence",
     "visual confidence reasons",
     "screenshot paths",
+    "shareable screenshots",
+    "trace files",
+    "ux validator findings",
+    "advanced detector flags",
+    "dead link checks",
     "friction type",
     "surface checked",
     "conversion outcome",
@@ -205,6 +222,8 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "friction_type": row.get("friction_type", ""),
                 "surface_checked": row.get("surface_checked", ""),
                 "conversion_outcome": row.get("conversion_outcome", ""),
+                "product_surface_type": row.get("product_surface_type", ""),
+                "research_priority": row.get("research_priority", ""),
                 "angle_gate_decision": row.get("angle_gate_decision", ""),
                 "app_check_status": row.get("app_check_status", ""),
                 "recommended_manual_check": _cell_lines(row.get("recommended_manual_check", ""), 520),
@@ -214,6 +233,11 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "visual_confidence_reasons": _cell_lines(row.get("visual_confidence_reasons", ""), 360),
                 "evidence_found": _cell_lines(evidence, 760),
                 "screenshots": _cell_lines(row.get("screenshot_paths", ""), 520),
+                "shareable_screenshots": _cell_lines(row.get("shareable_screenshot_files", ""), 520),
+                "trace_files": _cell_lines(row.get("trace_files", ""), 520),
+                "ux_validator_findings": _cell_lines(row.get("ux_validator_findings", ""), 520),
+                "advanced_detector_flags": _cell_lines(row.get("advanced_detector_flags", ""), 240),
+                "dead_link_checks": _cell_lines(row.get("dead_link_checks", ""), 420),
                 "needs_manual_review": _yes_no(row.get("needs_manual_review", "")),
                 "quality_flags": _cell_lines(row.get("quality_flags", ""), 240),
                 "reviewer_notes": notes,
@@ -239,6 +263,9 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "estimated output tokens": row.get("estimated_output_tokens", ""),
                 "linkedin observation": row.get("linkedin_observation", ""),
                 "app flow observation": row.get("app_flow_observation", ""),
+                "product surface type": row.get("product_surface_type", ""),
+                "research priority": row.get("research_priority", ""),
+                "app review complaints": _shorten(row.get("app_review_complaints", ""), 900),
                 "app check status": row.get("app_check_status", ""),
                 "recommended manual check": _shorten(row.get("recommended_manual_check", ""), 900),
                 "template preview": _shorten(row.get("template_preview", ""), 900),
@@ -250,6 +277,11 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 ),
                 "visual confidence reasons": _shorten(row.get("visual_confidence_reasons", ""), 900),
                 "screenshot paths": _shorten(row.get("screenshot_paths", ""), 900),
+                "shareable screenshots": _shorten(row.get("shareable_screenshot_files", ""), 900),
+                "trace files": _shorten(row.get("trace_files", ""), 900),
+                "ux validator findings": _shorten(row.get("ux_validator_findings", ""), 900),
+                "advanced detector flags": _shorten(row.get("advanced_detector_flags", ""), 500),
+                "dead link checks": _shorten(row.get("dead_link_checks", ""), 900),
                 "friction type": row.get("friction_type", ""),
                 "surface checked": row.get("surface_checked", ""),
                 "conversion outcome": row.get("conversion_outcome", ""),
@@ -666,12 +698,67 @@ def _write_readable_xlsx(rows: list[dict[str, Any]], output_path: Path) -> None:
     wb.save(output_path)
 
 
+def _split_file_list(value: Any) -> list[Path]:
+    paths: list[Path] = []
+    for item in str(value or "").replace("\n", "|").split("|"):
+        item = item.strip()
+        if not item:
+            continue
+        path = Path(item)
+        if path.exists() and path.is_file():
+            paths.append(path)
+    return paths
+
+
+def _copy_assets_for_delivery(rows: list[dict[str, Any]], output_path: Path) -> Path | None:
+    assets_root = output_path.with_name(f"{output_path.stem}_assets")
+    screenshots_dir = assets_root / "screenshots"
+    traces_dir = assets_root / "traces"
+    copied_files: list[Path] = []
+
+    for row in rows:
+        shareable_screenshots: list[str] = []
+        shareable_traces: list[str] = []
+        for source in _split_file_list(row.get("screenshot_paths", "")):
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+            target = screenshots_dir / source.name
+            if not target.exists():
+                shutil.copy2(source, target)
+            copied_files.append(target)
+            shareable_screenshots.append(str(target.relative_to(output_path.parent)))
+        for source in _split_file_list(row.get("trace_files", "")):
+            traces_dir.mkdir(parents=True, exist_ok=True)
+            target = traces_dir / source.name
+            if not target.exists():
+                shutil.copy2(source, target)
+            copied_files.append(target)
+            shareable_traces.append(str(target.relative_to(output_path.parent)))
+        if shareable_screenshots:
+            row["shareable_screenshot_files"] = " | ".join(dict.fromkeys(shareable_screenshots))
+        if shareable_traces:
+            row["trace_files"] = " | ".join(dict.fromkeys(shareable_traces))
+
+    if not copied_files:
+        return None
+
+    package_path = output_path.with_name(f"{output_path.stem}_delivery_package.zip")
+    with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        if output_path.exists():
+            archive.write(output_path, output_path.name)
+        for file_path in copied_files:
+            archive.write(file_path, file_path.relative_to(output_path.parent))
+    return package_path
+
+
 def export_client_batch_rows(rows: list[dict[str, Any]], output_path: str | Path) -> None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _copy_assets_for_delivery(rows, path)
     if path.suffix.lower() == ".xlsx":
         _write_readable_xlsx(rows, path)
+        _copy_assets_for_delivery(rows, path)
     else:
         compact_rows, _ = _client_rows(rows)
         df = pd.DataFrame(compact_rows, columns=CLIENT_REVIEW_COLUMNS)
         df.to_csv(path, index=False, encoding="utf-8-sig", sep=";")
+        _copy_assets_for_delivery(rows, path)

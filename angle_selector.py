@@ -114,6 +114,20 @@ HIGH_VALUE_FLOW_MARKERS = {
     "too many steps",
     "unnecessary clicks",
 }
+APP_FIRST_MARKERS = {
+    "app store",
+    "google play",
+    "app listing",
+    "public review complaint",
+    "review complaint",
+    "onboarding",
+    "permission",
+    "access code",
+    "signup requirement",
+    "paywall",
+    "subscription",
+    "first screen",
+}
 HIGH_VALUE_PROOF_MARKERS = {
     "case study",
     "direct quote",
@@ -280,7 +294,7 @@ def _angle_bucket(fact: EvidenceFact) -> int:
     ):
         return 4
     if fact.friction_type == "app_store_signal":
-        return 5
+        return 1 if _contains_any(text, APP_FIRST_MARKERS) else 5
     return friction_priority
 
 
@@ -306,16 +320,16 @@ def _surface_rank(fact: EvidenceFact) -> int:
         or _contains_any(evidence_text, {"first screen", "booking flow", "signup flow", "onboarding"})
     ):
         return 0
-    if "mobile" in surface_text:
+    if "app listing" in surface_text or "app-store" in surface_text or "google play" in surface_text:
         return 1
-    if "landing" in surface_text or "homepage" in surface_text or "website" in surface_text:
+    if "mobile" in surface_text or "screenshot" in evidence_text:
         return 2
-    if "case study" in surface_text or "testimonial" in surface_text:
+    if "landing" in surface_text or "homepage" in surface_text or "website" in surface_text:
         return 3
-    if "app listing" in surface_text or "app-store" in surface_text:
+    if "case study" in surface_text or "testimonial" in surface_text:
         return 4
     if "blog" in surface_text:
-        return 6
+        return 7
     return 5
 
 

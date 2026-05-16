@@ -16,6 +16,7 @@ from llm_client import LLMClient
 from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
 from personalization_writer import write_personalization
 from quality_checker import check_quality
+from surface_classifier import classify_surface, is_app_first, research_priority_for
 from tone_profiles import load_tone_profile
 from web_research import research_company
 
@@ -53,6 +54,9 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "friction_checklist": "",
         "app_check_status": "",
         "recommended_manual_check": "",
+        "product_surface_type": "",
+        "research_priority": "",
+        "app_review_complaints": "",
         "template_preview": "",
         "visual_observations": "",
         "visual_quality_flags": "",
@@ -60,6 +64,11 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "visual_confidence_score": "",
         "visual_confidence_reasons": "",
         "screenshot_paths": "",
+        "shareable_screenshot_files": "",
+        "trace_files": "",
+        "advanced_detector_flags": "",
+        "ux_validator_findings": "",
+        "dead_link_checks": "",
         "friction_type": "",
         "surface_checked": "",
         "conversion_outcome": "",
@@ -112,6 +121,8 @@ def _attach_run_metadata(row: dict[str, Any], client: LLMClient, tone_profile_na
 
 def _looks_app_first(lead: LeadInput, row: dict[str, Any] | None = None, research: ResearchResult | None = None) -> bool:
     row = row or {}
+    if row.get("product_surface_type") == "app_first_product":
+        return True
     text_parts = [
         lead.website_url,
         lead.optional_notes,
@@ -139,6 +150,17 @@ def _looks_app_first(lead: LeadInput, row: dict[str, Any] | None = None, researc
         "app onboarding",
     }
     return domain.endswith(".app") or bool(lead.app_store_url.strip()) or any(marker in text for marker in app_markers)
+
+
+def _set_surface_metadata(
+    row: dict[str, Any],
+    lead: LeadInput,
+    research: ResearchResult | None = None,
+    deep_research=None,
+) -> None:
+    surface_type = classify_surface(lead, research, deep_research)
+    row["product_surface_type"] = surface_type
+    row["research_priority"] = research_priority_for(surface_type)
 
 
 def _manual_check_recommendation(
@@ -206,7 +228,16 @@ def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[
                 "recent_news_note": deep_research.recent_news_note,
                 "competitor_context": deep_research.competitor_context,
                 "friction_checklist": join_list(deep_research.friction_checklist),
+                "app_review_complaints": join_list(deep_research.review_complaints),
             }
+        )
+    _set_surface_metadata(row, lead, research, deep_research)
+    if row["product_surface_type"] == "app_first_product":
+        research.summary = join_list(
+            [
+                f"Product surface type: {row['product_surface_type']}. Research priority: {row['research_priority']}",
+                research.summary,
+            ]
         )
     row.update(
         {
@@ -216,6 +247,10 @@ def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[
             "visual_confidence_score": research.visual_confidence_score,
             "visual_confidence_reasons": join_list(research.visual_confidence_reasons),
             "screenshot_paths": join_list(research.screenshot_paths),
+            "trace_files": join_list(research.trace_files),
+            "advanced_detector_flags": join_list(research.advanced_detector_flags),
+            "ux_validator_findings": join_list(research.ux_validator_findings),
+            "dead_link_checks": join_list(research.dead_link_checks),
         }
     )
 
@@ -233,6 +268,16 @@ def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[
             + join_list(research.visual_confidence_reasons)
             + " Screenshot paths: "
             + join_list(research.screenshot_paths)
+        )
+    if row.get("product_surface_type") == "app_first_product":
+        evidence_parts.insert(0, f"Research priority: {row.get('research_priority')}")
+    if row.get("app_review_complaints"):
+        evidence_parts.insert(0, "Public review complaint signals: " + row["app_review_complaints"])
+    if research.ux_validator_findings or research.dead_link_checks:
+        evidence_parts.append(
+            "Internal UX validator evidence, do not copy technical wording directly: "
+            + join_list(research.ux_validator_findings[:8])
+            + (" Dead link checks: " + join_list(research.dead_link_checks[:8]) if research.dead_link_checks else "")
         )
 
     row.update(
@@ -366,8 +411,16 @@ def _process_valid_lead(
                 "recent_news_note": deep_research.recent_news_note,
                 "competitor_context": deep_research.competitor_context,
                 "friction_checklist": join_list(deep_research.friction_checklist),
+                "app_review_complaints": join_list(deep_research.review_complaints),
             }
         )
+    _set_surface_metadata(row, lead, research, deep_research)
+    research.summary = join_list(
+        [
+            f"Product surface type: {row['product_surface_type']}. Research priority: {row['research_priority']}",
+            research.summary,
+        ]
+    )
     row.update(
         {
             "visual_observations": join_list(research.visual_observations),
@@ -376,12 +429,22 @@ def _process_valid_lead(
             "visual_confidence_score": research.visual_confidence_score,
             "visual_confidence_reasons": join_list(research.visual_confidence_reasons),
             "screenshot_paths": join_list(research.screenshot_paths),
+            "trace_files": join_list(research.trace_files),
+            "advanced_detector_flags": join_list(research.advanced_detector_flags),
+            "ux_validator_findings": join_list(research.ux_validator_findings),
+            "dead_link_checks": join_list(research.dead_link_checks),
         }
     )
     row["raw_research_summary"] = research.summary
     row["source_urls"] = join_list(research.source_urls)
-    if research.visual_quality_flags:
-        row["quality_flags"] = join_list([row.get("quality_flags", ""), join_list(research.visual_quality_flags)])
+    if research.visual_quality_flags or research.advanced_detector_flags:
+        row["quality_flags"] = join_list(
+            [
+                row.get("quality_flags", ""),
+                join_list(research.visual_quality_flags),
+                join_list(research.advanced_detector_flags),
+            ]
+        )
 
     if not research.summary.strip():
         row["quality_flags"] = "research_failed"
@@ -488,6 +551,7 @@ def _process_valid_lead(
         "selected_angle_not_strong",
         "app_store_angle_review",
         "low_confidence_visual_finding",
+        "technical_audit_language",
     }
     existing_flags = {
         flag.strip()

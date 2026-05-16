@@ -42,6 +42,8 @@ class Settings:
     browser_rendering: str
     browser_wait_seconds: float
     visual_review: str
+    advanced_detectors: str
+    lighthouse_review: str
     tone_profile: str
 
     @property
@@ -110,6 +112,8 @@ def load_settings() -> Settings:
         browser_rendering=os.getenv("BROWSER_RENDERING", "auto").strip().lower(),
         browser_wait_seconds=max(0.5, _float_env("BROWSER_WAIT_SECONDS", 2.0)),
         visual_review=os.getenv("VISUAL_REVIEW", "auto").strip().lower(),
+        advanced_detectors=os.getenv("ADVANCED_DETECTORS", "auto").strip().lower(),
+        lighthouse_review=os.getenv("LIGHTHOUSE_REVIEW", "auto").strip().lower(),
         tone_profile=os.getenv("TONE_PROFILE", "friction_first").strip() or "friction_first",
     )
 
