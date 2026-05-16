@@ -154,7 +154,7 @@ def review_df_to_training_df(df: pd.DataFrame) -> pd.DataFrame:
     out["person"] = df.get("person", "")
     out["role"] = df.get("role", "")
     out["website"] = df.get("website", "")
-    out["current_line"] = df.get("personalized_line", "")
+    out["current_line"] = df.get("template_preview", df.get("personalized_line", ""))
     out["client_decision"] = ""
     out["client_rewrite"] = ""
     out["main_reason"] = ""
