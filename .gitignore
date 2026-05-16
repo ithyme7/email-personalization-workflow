@@ -9,6 +9,8 @@ dist/
 data/cache/*
 data/output/*
 data/screenshots/*
+data/traces/*
+data/lighthouse/*
 data/ui_uploads/*
 data/custom_tone_profiles/*
 data/run_history/*
@@ -16,6 +18,8 @@ data/goldset/*
 !data/cache/.gitkeep
 !data/output/.gitkeep
 !data/screenshots/.gitkeep
+!data/traces/.gitkeep
+!data/lighthouse/.gitkeep
 !data/goldset/.gitkeep
 *.xlsx
 *.xls

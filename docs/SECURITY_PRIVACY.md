@@ -32,6 +32,22 @@ Use only reviewer-supplied notes or publicly accessible information. Do not bypa
 
 Every output is reviewable. The workflow should mark uncertain rows rather than hiding uncertainty.
 
+## Internal Versus Client-Safe Artifacts
+
+Internal artifacts can include rich debugging material such as:
+
+- Playwright traces
+- raw detector findings
+- raw axe/Lighthouse details
+- local screenshot paths
+- internal reviewer notes
+
+Do not treat those as the default client deliverable.
+
+For external handoff, use the web app's client-safe package. It keeps the client-facing CSV/XLSX lightweight and removes raw traces, internal detector output, local filesystem paths, and low-level audit details. It may include selected screenshots when those screenshots are useful evidence.
+
+If a row has `privacy_flags`, review it before sharing any related assets.
+
 ## Retention
 
 Recommended default:

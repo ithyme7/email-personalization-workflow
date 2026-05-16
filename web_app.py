@@ -11,9 +11,11 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from client_safe_export import create_client_safe_package
 from cli import run
 from config import DATA_DIR, OUTPUT_DIR, load_settings
 from cost_estimator import CostEstimate, estimate_batch_cost, price_for_model
+from eval_runner import evaluate_frozen_goldset, export_frozen_eval_report
 from export import CLIENT_REVIEW_COLUMNS, _client_rows
 from google_sheets import (
     GoogleSheetsError,
@@ -179,6 +181,12 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "surface_correctness_score",
         "surface_correctness_reasons",
         "visual_reliability_score",
+        "viewport_scope",
+        "viewport_scope_score",
+        "viewport_scope_reasons",
+        "evidence_scope",
+        "privacy_flags",
+        "client_safe_asset_status",
         "sendability_dimensions",
         "human_decision",
         "edited_line",
@@ -284,6 +292,8 @@ def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
             "hard_fail_reasons": 44,
             "soft_edit_reasons": 44,
             "surface_correctness_reasons": 44,
+            "viewport_scope_reasons": 44,
+            "privacy_flags": 44,
             "sendability_dimensions": 44,
             "edit_notes": 52,
             "quality_flags": 42,
@@ -711,8 +721,8 @@ def main() -> None:
 
     provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review = _sidebar_settings()
 
-    dashboard_tab, setup_tab, review_tab, export_tab, calibration_tab, history_tab, presets_tab = st.tabs(
-        ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Tone Calibration", "History", "Tone Presets"]
+    dashboard_tab, setup_tab, review_tab, export_tab, eval_tab, calibration_tab, history_tab, presets_tab = st.tabs(
+        ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Evals", "Tone Calibration", "History", "Tone Presets"]
     )
 
     with dashboard_tab:
@@ -880,6 +890,12 @@ def main() -> None:
                     "surface_correctness_score",
                     "surface_correctness_reasons",
                     "visual_reliability_score",
+                    "viewport_scope",
+                    "viewport_scope_score",
+                    "viewport_scope_reasons",
+                    "evidence_scope",
+                    "privacy_flags",
+                    "client_safe_asset_status",
                     "sendability_dimensions",
                 ],
                 column_config={
@@ -896,6 +912,12 @@ def main() -> None:
                     "surface_correctness_score": st.column_config.NumberColumn("surface_correctness_score", width="small"),
                     "surface_correctness_reasons": st.column_config.TextColumn("surface_correctness_reasons", width="large"),
                     "visual_reliability_score": st.column_config.NumberColumn("visual_reliability_score", width="small"),
+                    "viewport_scope": st.column_config.TextColumn("viewport_scope", width="small"),
+                    "viewport_scope_score": st.column_config.NumberColumn("viewport_scope_score", width="small"),
+                    "viewport_scope_reasons": st.column_config.TextColumn("viewport_scope_reasons", width="large"),
+                    "evidence_scope": st.column_config.TextColumn("evidence_scope", width="small"),
+                    "privacy_flags": st.column_config.TextColumn("privacy_flags", width="large"),
+                    "client_safe_asset_status": st.column_config.TextColumn("client_safe_asset_status", width="small"),
                     "sendability_dimensions": st.column_config.TextColumn("sendability_dimensions", width="large"),
                     "human_decision": st.column_config.SelectboxColumn("human_decision", options=HUMAN_DECISIONS),
                     "edited_line": st.column_config.TextColumn("edited_line", width="large"),
@@ -1006,6 +1028,24 @@ def main() -> None:
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
+            base_dir = Path(output_path).parent if output_path else None
+            if st.button("Create client-safe delivery package", use_container_width=True):
+                try:
+                    package = create_client_safe_package(df, base_dir=base_dir)
+                    st.session_state["client_safe_package"] = str(package)
+                    st.success(f"Client-safe package created: {package}")
+                except Exception as exc:
+                    st.error(f"Could not create client-safe package: {exc}")
+            safe_package = st.session_state.get("client_safe_package")
+            if safe_package and Path(safe_package).exists():
+                st.download_button(
+                    "Download client-safe package",
+                    Path(safe_package).read_bytes(),
+                    Path(safe_package).name,
+                    "application/zip",
+                    use_container_width=True,
+                )
+            st.caption("Client-safe packages exclude raw traces, internal detector output, and local file paths. Use the full workbook/package only for internal debugging.")
 
             with st.expander("Optional: export edited rows to Google Sheets"):
                 export_url = st.text_input("Destination Google Sheets URL")
@@ -1037,6 +1077,48 @@ def main() -> None:
                         )
                 if not any(path.exists() for path in goldset_paths().values()):
                     st.caption("No saved goldset yet. Review rows first, then click `Save reviewed rows to goldset`.")
+
+    with eval_tab:
+        st.subheader("Frozen eval set")
+        st.caption("Use this to check whether sendability thresholds still agree with your locked human-reviewed examples.")
+        summary, detail = evaluate_frozen_goldset()
+        if detail.empty:
+            st.info("No frozen eval set yet. Save reviewed rows to `frozen_eval_set` from the Review & Edit tab first.")
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+        else:
+            metrics = {str(row["metric"]): row["value"] for _, row in summary.iterrows()}
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("Frozen rows", metrics.get("frozen_eval_rows", 0))
+            e2.metric("Agreement", f"{metrics.get('exact_gate_human_agreement_pct', 0)}%")
+            e3.metric("Send precision", f"{metrics.get('send_precision_pct', 0)}%")
+            e4.metric("False sends", metrics.get("false_send_rows", 0))
+            st.markdown("**Eval summary**")
+            st.dataframe(summary, use_container_width=True, hide_index=True)
+            left, right = st.columns(2)
+            with left:
+                st.markdown("**Gate decisions**")
+                st.bar_chart(detail["gate_decision"].value_counts())
+            with right:
+                st.markdown("**Human decisions**")
+                st.bar_chart(detail["human_decision"].value_counts())
+            st.markdown("**Rows needing attention**")
+            attention = detail[(detail["agreement"] == "no") | (detail["false_send"] == "yes")]
+            st.dataframe(attention if not attention.empty else detail.head(0), use_container_width=True, height=280)
+            st.markdown("**Full eval details**")
+            st.dataframe(detail, use_container_width=True, height=360)
+            if st.button("Export frozen eval report", use_container_width=True):
+                report = export_frozen_eval_report()
+                st.session_state["eval_report_path"] = str(report)
+                st.success(f"Eval report created: {report}")
+            eval_report = st.session_state.get("eval_report_path")
+            if eval_report and Path(eval_report).exists():
+                st.download_button(
+                    "Download eval report",
+                    Path(eval_report).read_bytes(),
+                    Path(eval_report).name,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
 
     with calibration_tab:
         _tone_calibration_panel()

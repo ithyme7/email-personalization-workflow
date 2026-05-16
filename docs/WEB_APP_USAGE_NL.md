@@ -33,7 +33,8 @@ De launcher kiest automatisch `localhost:8501`, of de volgende vrije poort als 8
 9. Review en edit de rows in de `Review & Edit` tab.
 10. Zet per rij eventueel `human_decision`, `edited_line`, `edit_reason_category` en `edit_notes`.
 11. Sla goede/mislukte menselijke edits optioneel op als goldset.
-12. Exporteer als CSV, XLSX, full workbook, client delivery export of naar Google Sheets.
+12. Check optioneel de `Evals` tab als je een frozen eval set hebt.
+13. Exporteer als CSV, XLSX, full workbook, client delivery export, client-safe package of naar Google Sheets.
 
 ## Demo mode
 
@@ -67,6 +68,11 @@ De gate is opgesplitst in meerdere dimensies:
 - `template_fit_score`: of de line logisch doorloopt in de pitch.
 - `surface_correctness`: of de gekozen observatie past bij het type bedrijf/product.
 - `visual_reliability_score`: hoe betrouwbaar de visuele/UX-observatie is.
+- `viewport_scope`: of een visuele claim op mobiel, desktop, beide of onbekend bewijs steunt.
+- `evidence_scope`: of de rij bronlinks, screenshots, beide of dun bewijs heeft.
+- `privacy_flags`: interne waarschuwingen zoals traces of lokale paden die niet naar een client moeten.
+
+Hard-fail redenen blokkeren delivery. Soft-edit redenen betekenen meestal dat de rij herschrijfbaar is.
 
 ## Human edit goldset
 
@@ -92,6 +98,37 @@ data/goldset/candidate_training_set.csv
 ```
 
 Die goldset kun je later gebruiken om tone profiles, prompts, modelkeuze en pairwise evaluaties te verbeteren.
+
+## Evals
+
+In de `Evals` tab meet de app de huidige sendability-gate tegen je `frozen_eval_set`.
+
+De belangrijkste metrics:
+
+- agreement tussen gate en jouw menselijke beslissing
+- send precision
+- false sends
+- reject recall
+- surface correctness
+
+Gebruik dit vooral voordat je prompts, thresholds of modelkeuze verandert.
+
+## Client-safe package
+
+Gebruik in de `Export` tab bij voorkeur `Create client-safe delivery package` voor externe levering.
+
+Die package bevat:
+
+- opgeschoonde CSV
+- opgeschoonde XLSX
+- geselecteerde screenshots als ze beschikbaar zijn
+
+Die package bevat niet:
+
+- raw Playwright traces
+- raw detector output
+- interne auditdetails
+- lokale bestandspaden zoals `C:\Users\...`
 
 ## Google Sheets
 

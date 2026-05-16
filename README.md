@@ -50,8 +50,11 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Batch history with run date, model, cost estimate, ready/review split, and output path.
 - Tone calibration tab for saving client feedback as a reusable profile.
 - Multidimensional sendability gate with hard-fail reasons, soft-edit reasons, evidence score, copy score, outcome score, template-fit score, visual reliability, and surface correctness.
+- Viewport scope and evidence scope for visual/UX claims.
 - Human edit/goldset workflow with reviewed examples, frozen eval examples, and candidate training examples.
+- Frozen eval runner for measuring gate/human agreement on locked examples.
 - Client delivery export with a smaller column set for handoff.
+- Client-safe delivery package that excludes raw traces, internal detector output, and local paths.
 
 ## Public Safety Notes
 
@@ -147,6 +150,7 @@ The web app supports:
 - row-level progress bar
 - dashboard with review workload, visual confidence, friction types, quality flags, and estimated model cost
 - sendability dashboard showing Send/Edit/Reject split, hard-fail reasons, soft-edit reasons, and surface correctness
+- Evals tab for frozen goldset agreement, send precision, false sends, and eval report export
 - batch history
 - tone calibration from client feedback
 - review/edit rows
@@ -156,6 +160,7 @@ The web app supports:
 - export full workbook
 - optional export to Google Sheets
 - simplified client delivery CSV/XLSX
+- client-safe ZIP package for external handoff
 
 On Windows you can also double-click:
 
@@ -210,6 +215,27 @@ When screenshots or traces are created, the exporter also creates:
 
 Use the zip when sharing visual evidence with someone else, because local paths such as `C:\Users\...` are only useful on the machine that generated the run.
 
+For external delivery, prefer the client-safe package from the web app. It includes a cleaned CSV/XLSX and selected screenshots only. It excludes trace files, raw detector output, internal audit details, and local filesystem paths.
+
+## Frozen Eval Runner
+
+Once you have reviewed rows saved to `data/goldset/frozen_eval_set.csv`, you can export a regression report:
+
+```bash
+python eval_runner.py
+```
+
+The eval report measures:
+
+- exact gate/human agreement
+- send precision
+- reject recall
+- false-send rows
+- surface-correctness rate
+- average evidence and template-fit scores
+
+Use this before changing prompts, thresholds, model choice, or tone profiles.
+
 ## Productized Service Workflow
 
 For client work, the recommended workflow is:
@@ -246,6 +272,9 @@ The gate is multidimensional:
 - `template_fit_score`: whether the line naturally flows into the campaign template.
 - `surface_correctness`: whether the selected surface matches the product type.
 - `visual_reliability_score`: how reliable the visual/UX finding is.
+- `viewport_scope`: whether a visual claim is backed by mobile, desktop, both, or unknown viewport evidence.
+- `evidence_scope`: whether the row has source URLs, screenshots, both, or thin evidence.
+- `privacy_flags`: internal markers such as trace files or local paths that should not go into client handoff.
 
 In the web app, use `human_decision`, `edited_line`, `edit_reason_category`, and `edit_notes` in the Review tab. Click `Save reviewed rows to goldset` to append reviewed examples to one of three local splits:
 

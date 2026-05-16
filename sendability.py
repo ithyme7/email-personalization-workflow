@@ -24,6 +24,12 @@ SENDABILITY_COLUMNS = [
     "surface_correctness_score",
     "surface_correctness_reasons",
     "visual_reliability_score",
+    "viewport_scope",
+    "viewport_scope_score",
+    "viewport_scope_reasons",
+    "evidence_scope",
+    "privacy_flags",
+    "client_safe_asset_status",
     "sendability_dimensions",
     "human_decision",
     "edited_line",
@@ -81,6 +87,12 @@ GOLDSET_COLUMNS = [
     "surface_correctness_score",
     "surface_correctness_reasons",
     "visual_reliability_score",
+    "viewport_scope",
+    "viewport_scope_score",
+    "viewport_scope_reasons",
+    "evidence_scope",
+    "privacy_flags",
+    "client_safe_asset_status",
     "evidence_found",
     "evidence_refs",
     "quality_flags",
@@ -304,7 +316,10 @@ def evaluate_evidence(row: Mapping[str, Any]) -> tuple[int, list[str], list[str]
     if "unsupported_claims" in quality_flags or "unsupported_claim" in quality_flags:
         hard.append("unsupported_claim")
         score -= 35
-    return max(0, min(100, score)), hard, soft
+    score = max(0, min(100, score))
+    if score < 60:
+        hard.append("evidence_below_send_threshold")
+    return score, hard, soft
 
 
 def evaluate_copy_quality(row: Mapping[str, Any]) -> tuple[int, list[str], list[str]]:
@@ -392,6 +407,72 @@ def evaluate_visual_reliability(row: Mapping[str, Any]) -> tuple[int, list[str]]
     return max(0, min(100, score)), reasons
 
 
+def evaluate_viewport_scope(row: Mapping[str, Any]) -> tuple[str, int, list[str]]:
+    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    blob = " ".join(
+        [
+            _text(row.get("shareable_screenshots")),
+            _text(row.get("screenshots")),
+            _text(row.get("screenshot_paths")),
+            _text(row.get("visual_confidence_reasons")),
+            _text(row.get("visual_flags") or row.get("visual_quality_flags")),
+            _text(row.get("ux_validator_findings")),
+            _text(row.get("advanced_detector_flags")),
+        ]
+    ).lower()
+    visual_claim = _has_any(line, VISUAL_CLAIM_TERMS) or _has_any(blob, VISUAL_CLAIM_TERMS)
+    has_mobile = "mobile" in blob
+    has_desktop = "desktop" in blob
+    if not visual_claim:
+        return "not_required", 80, []
+    if has_mobile and has_desktop:
+        return "mobile_and_desktop", 95, []
+    if has_mobile:
+        return "mobile_only", 72, ["visual_claim_only_confirmed_on_mobile"]
+    if has_desktop:
+        return "desktop_only", 65, ["visual_claim_only_confirmed_on_desktop"]
+    return "unknown", 35, ["visual_claim_without_viewport_scope"]
+
+
+def evaluate_evidence_scope(row: Mapping[str, Any]) -> str:
+    has_source = bool(_text(row.get("source_urls")))
+    has_screenshot = bool(_text(row.get("shareable_screenshots") or row.get("screenshots") or row.get("screenshot_paths")))
+    has_trace = bool(_text(row.get("trace_files")))
+    if has_source and has_screenshot:
+        return "source_and_screenshot"
+    if has_source:
+        return "source_only"
+    if has_screenshot:
+        return "screenshot_only"
+    if has_trace:
+        return "trace_only_internal"
+    return "thin_or_missing"
+
+
+def evaluate_privacy(row: Mapping[str, Any]) -> tuple[str, str]:
+    flags: list[str] = []
+    trace_files = _text(row.get("trace_files"))
+    screenshots = _text(row.get("shareable_screenshots") or row.get("screenshots") or row.get("screenshot_paths"))
+    debug_blob = " ".join(
+        [
+            trace_files,
+            screenshots,
+            _text(row.get("dead_link_checks")),
+            _text(row.get("ux_validator_findings")),
+            _text(row.get("advanced_detector_flags")),
+        ]
+    ).lower()
+    if trace_files:
+        flags.append("trace_files_internal_only")
+    if "c:\\users\\" in debug_blob or "/users/" in debug_blob:
+        flags.append("local_paths_need_sanitizing")
+    if "headers" in debug_blob or "cookie" in debug_blob or "authorization" in debug_blob:
+        flags.append("possible_sensitive_debug_metadata")
+    if flags:
+        return " | ".join(_dedupe(flags)), "client_safe_export_required"
+    return "", "client_safe"
+
+
 def evaluate_surface_correctness(row: Mapping[str, Any]) -> tuple[str, int, list[str], bool]:
     line = _text(row.get("personalized_line") or row.get("opening_line"))
     evidence = _text(row.get("evidence_found") or row.get("evidence_used_for_copy") or row.get("evidence_points"))
@@ -453,6 +534,9 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
     outcome_score, outcome_reasons = evaluate_outcome_alignment(row)
     template_score, template_reasons = evaluate_template_fit(row)
     visual_score, visual_reasons = evaluate_visual_reliability(row)
+    viewport_scope, viewport_score, viewport_reasons = evaluate_viewport_scope(row)
+    evidence_scope = evaluate_evidence_scope(row)
+    privacy_flags, client_safe_asset_status = evaluate_privacy(row)
     surface_label, surface_score, surface_reasons, surface_hard = evaluate_surface_correctness(row)
 
     hard_reasons: list[str] = []
@@ -473,6 +557,7 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
     soft_reasons.extend(outcome_reasons)
     soft_reasons.extend(template_reasons)
     soft_reasons.extend(visual_reasons)
+    soft_reasons.extend(viewport_reasons)
     soft_reasons.extend(surface_reasons)
     if surface_hard:
         hard_reasons.extend(surface_reasons)
@@ -486,7 +571,8 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
         + outcome_score * 0.16
         + template_score * 0.14
         + surface_score * 0.16
-        + visual_score * 0.07
+        + visual_score * 0.04
+        + viewport_score * 0.03
     )
     if not line:
         weighted_score = min(weighted_score, 20)
@@ -506,7 +592,7 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
     reasons = _dedupe(hard_reasons + soft_reasons)
     dimensions = (
         f"evidence={evidence_score}; copy={copy_score}; outcome={outcome_score}; "
-        f"template={template_score}; surface={surface_score}; visual={visual_score}"
+        f"template={template_score}; surface={surface_score}; visual={visual_score}; viewport={viewport_score}"
     )
     return {
         "sendability_decision": decision,
@@ -522,6 +608,12 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
         "surface_correctness_score": surface_score,
         "surface_correctness_reasons": " | ".join(surface_reasons),
         "visual_reliability_score": visual_score,
+        "viewport_scope": viewport_scope,
+        "viewport_scope_score": viewport_score,
+        "viewport_scope_reasons": " | ".join(viewport_reasons),
+        "evidence_scope": evidence_scope,
+        "privacy_flags": privacy_flags,
+        "client_safe_asset_status": client_safe_asset_status,
         "sendability_dimensions": dimensions,
     }
 

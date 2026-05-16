@@ -60,6 +60,25 @@ The next evaluation layer should track:
 - tone match: whether the line sounds like the target client style
 - cost per unique company
 
+## Running The Frozen Eval Report
+
+After saving reviewed rows to `frozen_eval_set`, run:
+
+```bash
+python eval_runner.py
+```
+
+This creates an Excel report under `data/output/evals/` with:
+
+- gate versus human agreement
+- send precision
+- reject recall
+- false-send rows
+- surface-correctness rate
+- row-level detail for misses
+
+Use this before changing prompts, thresholds, model choice, or client tone profiles.
+
 ## Pairwise Judge Direction
 
 Do not ask a judge model vague questions like “is this good?”
