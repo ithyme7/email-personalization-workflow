@@ -22,6 +22,7 @@ from google_sheets import (
     read_private_sheet,
     read_public_sheet,
 )
+from run_history import append_run_history, load_run_history
 from tone_preset_library import get_preset_profile, preset_options
 from tone_profiles import available_tone_profiles, load_tone_profile
 
@@ -30,6 +31,17 @@ DEFAULT_CONTEXT = "We help mobile app teams with this type of work, figure out w
 RUN_INPUT_DIR = DATA_DIR / "ui_uploads"
 RUN_OUTPUT_DIR = OUTPUT_DIR / "ui_runs"
 CUSTOM_PROFILE_DIR = DATA_DIR / "custom_tone_profiles"
+SAMPLE_INPUT_PATH = DATA_DIR / "input" / "sample_companies.csv"
+DELIVERY_COLUMNS = [
+    "company",
+    "person",
+    "role",
+    "website",
+    "personalized_line",
+    "needs_manual_review",
+    "quality_flags",
+    "reviewer_notes",
+]
 
 
 st.set_page_config(
@@ -163,6 +175,39 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "source_urls",
     ]
     return df[[col for col in ordered if col in df.columns]]
+
+
+def _delivery_df(df: pd.DataFrame) -> pd.DataFrame:
+    columns = [column for column in DELIVERY_COLUMNS if column in df.columns]
+    delivery = df[columns].copy()
+    if "status" in df.columns:
+        delivery.insert(0, "status", df["status"])
+    return delivery
+
+
+def _batch_summary(df: pd.DataFrame, cost: CostEstimate | None, output_path: Path, input_path: Path, tone_profile: str, provider: str, model_name: str) -> dict[str, Any]:
+    total = len(df)
+    ready = _count_status(df, "Ready")
+    review = _count_status(df, "Review")
+    research_only = _count_status(df, "Research only")
+    unique_companies = df["company"].nunique() if "company" in df else 0
+    return {
+        "input_file": str(input_path),
+        "output_file": str(output_path),
+        "rows": total,
+        "unique_companies": int(unique_companies),
+        "ready_rows": ready,
+        "review_rows": review,
+        "research_only_rows": research_only,
+        "ready_rate": round(ready / total * 100, 1) if total else 0,
+        "provider": provider,
+        "model": model_name,
+        "tone_profile": Path(tone_profile).stem if str(tone_profile).endswith(".json") else tone_profile,
+        "estimated_cost_usd": round(cost.estimated_cost_usd, 6) if cost else 0,
+        "llm_calls": cost.llm_calls if cost else 0,
+        "input_tokens": cost.input_tokens if cost else 0,
+        "output_tokens": cost.output_tokens if cost else 0,
+    }
 
 
 def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
@@ -309,6 +354,17 @@ def _run_batch(
     st.session_state["output_path"] = str(output_path)
     st.session_state["last_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
     st.session_state["cost_estimate"] = cost
+    append_run_history(
+        _batch_summary(
+            st.session_state["review_df"],
+            cost,
+            output_path,
+            input_path,
+            tone_profile,
+            provider,
+            model_name,
+        )
+    )
     return rows, output_path
 
 
@@ -386,9 +442,111 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
         st.dataframe(queue[review_cols], use_container_width=True, height=300)
 
 
+def _how_it_works_panel() -> None:
+    st.subheader("Client-facing workflow")
+    st.markdown(
+        """
+        <div class="ux-card">
+            <span class="ux-badge">1 Lead list</span>
+            <span class="ux-badge">2 Public research</span>
+            <span class="ux-badge">3 Evidence extraction</span>
+            <span class="ux-badge">4 Friction angle</span>
+            <span class="ux-badge">5 Tone profile</span>
+            <span class="ux-badge">6 Draft line</span>
+            <span class="ux-badge">7 QC</span>
+            <span class="ux-badge">8 Human review</span>
+            <p class="ux-muted" style="margin-top:12px;">
+            The system does not start by asking a model to write a clever opener. It first gathers public evidence,
+            selects a current friction point or proof gap, then writes a short line that can be checked against the source.
+            Rows with weak evidence, low visual confidence, or uncertain claims stay in the review queue.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("**Research surfaces**")
+        st.write("Homepage, product pages, pricing, case studies, testimonials, app pages, public app listings and screenshots.")
+    with col2:
+        st.markdown("**Preferred angles**")
+        st.write("Broken formatting, unclear CTA, onboarding friction, booking/signup friction, weak proof and broad positioning.")
+    with col3:
+        st.markdown("**Review logic**")
+        st.write("No em dashes, no generic praise, no unsupported claims, no blog-post filler, and manual review when evidence is weak.")
+
+
+def _tone_calibration_panel() -> None:
+    st.subheader("Tone calibration")
+    st.caption("Paste client feedback here to save a reusable client profile. This is optional; presets still work by themselves.")
+    base_profiles = available_tone_profiles()
+    base_index = base_profiles.index("friction_first") if "friction_first" in base_profiles else 0
+    base = st.selectbox("Base profile", base_profiles, index=base_index, key="calibration_base_profile")
+    client_name = st.text_input("Client/profile name", value="client_profile", key="calibration_client_name")
+    feedback = st.text_area("Client feedback / new rules", height=150, key="calibration_feedback")
+    good_examples = st.text_area("Good examples, one per line", height=110, key="calibration_good")
+    bad_examples = st.text_area("Bad examples, one per line", height=110, key="calibration_bad")
+    if st.button("Save client tone profile", type="primary", use_container_width=True):
+        if not client_name.strip():
+            st.error("Add a client/profile name first.")
+            return
+        path = _custom_profile_path(base, client_name, feedback, good_examples, bad_examples)
+        st.session_state["preferred_tone_profile"] = path.stem
+        st.success(f"Saved profile: {path.name}")
+        st.caption(f"It will appear in the tone profile dropdown as `{path.stem}`.")
+
+
+def _history_panel() -> None:
+    st.subheader("Batch history")
+    history = load_run_history()
+    if history.empty:
+        st.info("No run history yet. Run a batch first.")
+        return
+    visible_columns = [
+        column
+        for column in [
+            "created_at",
+            "rows",
+            "unique_companies",
+            "ready_rows",
+            "review_rows",
+            "research_only_rows",
+            "ready_rate",
+            "estimated_cost_usd",
+            "provider",
+            "model",
+            "tone_profile",
+            "output_file",
+        ]
+        if column in history.columns
+    ]
+    st.dataframe(history[visible_columns], use_container_width=True, height=360)
+    output_files = [str(path) for path in history.get("output_file", pd.Series(dtype=str)).dropna().tolist() if Path(str(path)).exists()]
+    if output_files:
+        selected = st.selectbox("Load/download previous workbook", output_files)
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Load review sheet into app", use_container_width=True):
+                try:
+                    st.session_state["review_df"] = pd.read_excel(selected, sheet_name="Review").fillna("")
+                    st.session_state["output_path"] = selected
+                    st.success("Previous run loaded into Review & Edit.")
+                except Exception as exc:
+                    st.error(f"Could not load workbook: {exc}")
+        with c2:
+            st.download_button(
+                "Download selected workbook",
+                Path(selected).read_bytes(),
+                Path(selected).name,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+
 def _profile_picker() -> str:
     tone_names = available_tone_profiles()
-    default_index = tone_names.index("friction_first") if "friction_first" in tone_names else 0
+    preferred = st.session_state.get("preferred_tone_profile", "friction_first")
+    default_index = tone_names.index(preferred) if preferred in tone_names else tone_names.index("friction_first") if "friction_first" in tone_names else 0
     selected_tone = st.selectbox("Tone profile", tone_names, index=default_index)
     st.info(_profile_description(selected_tone))
 
@@ -415,8 +573,8 @@ def main() -> None:
 
     provider, model_name, api_key, input_price, output_price = _sidebar_settings()
 
-    dashboard_tab, setup_tab, review_tab, export_tab, presets_tab = st.tabs(
-        ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Tone Presets"]
+    dashboard_tab, setup_tab, review_tab, export_tab, calibration_tab, history_tab, presets_tab = st.tabs(
+        ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Tone Calibration", "History", "Tone Presets"]
     )
 
     with dashboard_tab:
@@ -438,12 +596,13 @@ def main() -> None:
             )
         else:
             _dashboard(st.session_state["review_df"], st.session_state.get("cost_estimate"))
+        _how_it_works_panel()
 
     with setup_tab:
         left, right = st.columns([1.05, 0.95], gap="large")
         with left:
             st.subheader("1. Input")
-            input_source = st.radio("Lead source", ["CSV upload", "Google Sheets"], horizontal=True)
+            input_source = st.radio("Lead source", ["CSV upload", "Google Sheets", "Demo sample"], horizontal=True)
             input_path: Path | None = None
             uploaded_file = None
             sheet_url = ""
@@ -452,7 +611,7 @@ def main() -> None:
 
             if input_source == "CSV upload":
                 uploaded_file = st.file_uploader("Lead CSV", type=["csv"])
-            else:
+            elif input_source == "Google Sheets":
                 sheet_url = st.text_input("Google Sheets URL")
                 worksheet_name = st.text_input("Worksheet name or tab name, optional")
                 sheet_service_file = st.file_uploader("Service-account JSON, optional for private Sheets", type=["json"])
@@ -464,6 +623,12 @@ def main() -> None:
                         st.dataframe(preview_df.head(10), use_container_width=True)
                     except GoogleSheetsError as exc:
                         st.error(str(exc))
+            else:
+                st.info("Demo sample selected. This uses the built-in sample CSV so you can show the workflow without preparing a file.")
+                if SAMPLE_INPUT_PATH.exists():
+                    st.dataframe(pd.read_csv(SAMPLE_INPUT_PATH, dtype=str).fillna("").head(10), use_container_width=True)
+                else:
+                    st.error(f"Sample file not found: {SAMPLE_INPUT_PATH}")
 
             st.subheader("2. Campaign context")
             campaign_context = st.text_area(
@@ -482,11 +647,16 @@ def main() -> None:
                             st.error("Upload a CSV first.")
                             st.stop()
                         input_path = _write_uploaded_csv(uploaded_file)
-                    else:
+                    elif input_source == "Google Sheets":
                         if not sheet_url.strip():
                             st.error("Paste a Google Sheets URL first.")
                             st.stop()
                         input_path = _load_google_sheet_to_csv(sheet_url, worksheet_name, sheet_service_file)
+                    else:
+                        if not SAMPLE_INPUT_PATH.exists():
+                            st.error("Sample CSV is missing.")
+                            st.stop()
+                        input_path = SAMPLE_INPUT_PATH
                     rows, output_path = _run_batch(
                         input_path,
                         campaign_context,
@@ -581,6 +751,30 @@ def main() -> None:
                     use_container_width=True,
                 )
 
+            st.markdown("**Client delivery export**")
+            delivery = _delivery_df(df)
+            delivery_columns = st.multiselect(
+                "Columns for client delivery",
+                delivery.columns.tolist(),
+                default=[column for column in ["company", "person", "role", "personalized_line"] if column in delivery.columns],
+            )
+            delivery_out = delivery[delivery_columns] if delivery_columns else delivery
+            d1, d2 = st.columns(2)
+            d1.download_button(
+                "Download client delivery CSV",
+                delivery_out.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                "client_delivery_personalized_lines.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+            d2.download_button(
+                "Download client delivery XLSX",
+                _df_to_xlsx_bytes(delivery_out),
+                "client_delivery_personalized_lines.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
             with st.expander("Optional: export edited rows to Google Sheets"):
                 export_url = st.text_input("Destination Google Sheets URL")
                 export_tab_name = st.text_input("Destination worksheet name", value="Review")
@@ -596,6 +790,12 @@ def main() -> None:
                     finally:
                         if credential_path and credential_path.exists():
                             credential_path.unlink(missing_ok=True)
+
+    with calibration_tab:
+        _tone_calibration_panel()
+
+    with history_tab:
+        _history_panel()
 
     with presets_tab:
         st.subheader("Tone presets")

@@ -39,6 +39,10 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Batch cost estimate using editable model-price assumptions.
 - Optional client-specific tone profiles saved locally.
 - One-click Windows launcher for the web app.
+- Demo sample mode for low-risk walkthroughs during calls.
+- Batch history with run date, model, cost estimate, ready/review split, and output path.
+- Tone calibration tab for saving client feedback as a reusable profile.
+- Client delivery export with a smaller column set for handoff.
 
 ## Public Safety Notes
 
@@ -123,6 +127,7 @@ http://localhost:8501
 
 The web app supports:
 
+- demo sample mode
 - CSV upload
 - Google Sheets input
 - campaign context input
@@ -132,11 +137,14 @@ The web app supports:
 - run batch button
 - row-level progress bar
 - dashboard with review workload, visual confidence, friction types, quality flags, and estimated model cost
+- batch history
+- tone calibration from client feedback
 - review/edit rows
 - export edited CSV
 - export edited XLSX
 - export full workbook
 - optional export to Google Sheets
+- simplified client delivery CSV/XLSX
 
 On Windows you can also double-click:
 
