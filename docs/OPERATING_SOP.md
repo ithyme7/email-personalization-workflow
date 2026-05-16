@@ -22,6 +22,9 @@ Start in the `Review` tab.
 Check:
 
 - Is the sendability decision `Send`, `Edit`, or `Reject`?
+- Are there hard-fail reasons?
+- Are there soft-edit reasons?
+- Is the surface correctness `Correct`, `Review`, or `Wrong`?
 - Does the line flow into the template preview?
 - Does it contain one clear observation?
 - Does it tie to conversion, activation, retention, bookings, trust, signup completion, or drop-off?
@@ -53,13 +56,23 @@ When you manually review rows, set:
 - `edit_reason_category`: why the row needed review.
 - `edit_notes`: short explanation, especially for client feedback.
 
-In the web app, click `Save reviewed rows to goldset`. This appends examples to `data/goldset/human_edits.csv` so future prompt and tone-profile changes can be tested against real edits.
+In the web app, choose a goldset split and click `Save reviewed rows to goldset`. This appends examples under `data/goldset/` so future prompt and tone-profile changes can be tested against real edits.
+
+Goldset splits:
+
+- `reviewed_examples`: normal reviewed output.
+- `frozen_eval_set`: locked regression examples for prompt/model comparisons.
+- `candidate_training_set`: examples that may later be used for tuning.
+
+Do not put every reviewed row into the frozen eval set. Use it for stable, representative examples across product types, surfaces, Send/Edit/Reject decisions, and failure categories.
 
 ## Delivery
 
 Deliver the workbook only after:
 
 - all client-delivery rows are `Send` or manually approved
+- any `Wrong` surface row is rewritten or rejected
+- hard-fail rows are not delivered
 - all obvious generic lines are fixed
 - weak rows are either improved or clearly marked
 - duplicate companies use consistent personalization

@@ -25,9 +25,12 @@ from google_sheets import (
 from run_history import append_run_history, load_run_history
 from sendability import (
     EDIT_REASON_CATEGORIES,
+    GOLDSET_SPLITS,
     HUMAN_DECISIONS,
     append_goldset_feedback,
     apply_sendability_to_dataframe,
+    goldset_paths,
+    load_goldset_summary,
 )
 from tone_preset_library import get_preset_profile, preset_options
 from tone_profiles import available_tone_profiles, load_tone_profile
@@ -166,6 +169,17 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "sendability_decision",
         "sendability_score",
         "sendability_reasons",
+        "hard_fail_reasons",
+        "soft_edit_reasons",
+        "evidence_score",
+        "copy_quality_score",
+        "outcome_alignment_score",
+        "template_fit_score",
+        "surface_correctness",
+        "surface_correctness_score",
+        "surface_correctness_reasons",
+        "visual_reliability_score",
+        "sendability_dimensions",
         "human_decision",
         "edited_line",
         "edit_reason_category",
@@ -196,6 +210,9 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "advanced_detector_flags",
         "dead_link_checks",
         "source_urls",
+        "tone_profile",
+        "model_provider",
+        "model_name",
     ]
     return df[[col for col in ordered if col in df.columns]]
 
@@ -223,6 +240,9 @@ def _batch_summary(df: pd.DataFrame, cost: CostEstimate | None, output_path: Pat
     sendable = int((df["sendability_decision"] == "Send").sum()) if "sendability_decision" in df else 0
     editable = int((df["sendability_decision"] == "Edit").sum()) if "sendability_decision" in df else 0
     rejected = int((df["sendability_decision"] == "Reject").sum()) if "sendability_decision" in df else 0
+    surface_correct = int((df["surface_correctness"] == "Correct").sum()) if "surface_correctness" in df else 0
+    surface_review = int((df["surface_correctness"] == "Review").sum()) if "surface_correctness" in df else 0
+    surface_wrong = int((df["surface_correctness"] == "Wrong").sum()) if "surface_correctness" in df else 0
     unique_companies = df["company"].nunique() if "company" in df else 0
     return {
         "input_file": str(input_path),
@@ -235,6 +255,9 @@ def _batch_summary(df: pd.DataFrame, cost: CostEstimate | None, output_path: Pat
         "sendability_send_rows": sendable,
         "sendability_edit_rows": editable,
         "sendability_reject_rows": rejected,
+        "surface_correct_rows": surface_correct,
+        "surface_review_rows": surface_review,
+        "surface_wrong_rows": surface_wrong,
         "ready_rate": round(ready / total * 100, 1) if total else 0,
         "provider": provider,
         "model": model_name,
@@ -258,6 +281,10 @@ def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
             "evidence_found": 84,
             "reviewer_notes": 66,
             "sendability_reasons": 52,
+            "hard_fail_reasons": 44,
+            "soft_edit_reasons": 44,
+            "surface_correctness_reasons": 44,
+            "sendability_dimensions": 44,
             "edit_notes": 52,
             "quality_flags": 42,
             "visual_confidence_reasons": 46,
@@ -449,14 +476,17 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
     sendable = int((df["sendability_decision"] == "Send").sum()) if "sendability_decision" in df else 0
     editable = int((df["sendability_decision"] == "Edit").sum()) if "sendability_decision" in df else 0
     rejected = int((df["sendability_decision"] == "Reject").sum()) if "sendability_decision" in df else 0
+    avg_evidence = round(pd.to_numeric(df.get("evidence_score", pd.Series(dtype=float)), errors="coerce").dropna().mean(), 1) if "evidence_score" in df else 0
+    avg_surface = round(pd.to_numeric(df.get("surface_correctness_score", pd.Series(dtype=float)), errors="coerce").dropna().mean(), 1) if "surface_correctness_score" in df else 0
 
     st.subheader("Batch dashboard")
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Rows", total, f"{unique_companies} unique companies")
     c2.metric("Send", sendable, f"{round(sendable / total * 100) if total else 0}%")
     c3.metric("Edit", editable)
     c4.metric("Reject", rejected)
-    c5.metric("Generated", generated)
+    c5.metric("Evidence", avg_evidence if avg_evidence == avg_evidence else 0)
+    c6.metric("Surface", avg_surface if avg_surface == avg_surface else 0)
     st.caption(f"Status layer: {ready} Ready, {review} Review, {research_only} Research only. Sendability is the stricter client-delivery gate.")
 
     if cost:
@@ -482,16 +512,25 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
             st.markdown("**Status distribution**")
             st.bar_chart(status_counts.set_index("status"))
 
-        flags = _top_split_counts(df, "quality_flags", 8)
-        if not flags.empty:
-            st.markdown("**Top quality flags**")
-            st.bar_chart(flags.set_index("label"))
+        hard_fails = _top_split_counts(df, "hard_fail_reasons", 8)
+        if not hard_fails.empty:
+            st.markdown("**Hard fail reasons**")
+            st.bar_chart(hard_fails.set_index("label"))
 
     with right:
         sendability_reasons = _top_split_counts(df, "sendability_reasons", 8)
         if not sendability_reasons.empty:
             st.markdown("**Top sendability reasons**")
             st.bar_chart(sendability_reasons.set_index("label"))
+
+        surface_counts = (
+            df["surface_correctness"].fillna("Unknown").replace("", "Unknown").value_counts().rename_axis("surface").reset_index(name="rows")
+            if "surface_correctness" in df
+            else pd.DataFrame()
+        )
+        if not surface_counts.empty:
+            st.markdown("**Surface correctness**")
+            st.bar_chart(surface_counts.set_index("surface"))
 
         visual_counts = (
             df["visual_confidence"].fillna("none").replace("", "none").value_counts().rename_axis("visual_confidence").reset_index(name="rows")
@@ -512,10 +551,13 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
         for col in [
             "sendability_decision",
             "sendability_score",
+            "surface_correctness",
             "company",
             "person",
             "personalized_line",
             "sendability_reasons",
+            "hard_fail_reasons",
+            "soft_edit_reasons",
             "quality_flags",
             "visual_confidence",
             "reviewer_notes",
@@ -604,6 +646,9 @@ def _history_panel() -> None:
             "sendability_send_rows",
             "sendability_edit_rows",
             "sendability_reject_rows",
+            "surface_correct_rows",
+            "surface_review_rows",
+            "surface_wrong_rows",
             "ready_rate",
             "estimated_cost_usd",
             "provider",
@@ -804,20 +849,54 @@ def main() -> None:
                 sorted(decision_options),
                 default=sorted(decision_options),
             )
+            surface_options = df["surface_correctness"].dropna().unique().tolist() if "surface_correctness" in df else []
+            surface_filter = st.multiselect(
+                "Filter surface correctness",
+                sorted(surface_options),
+                default=sorted(surface_options),
+            )
             filtered = df[df["status"].isin(status_filter)] if status_filter and "status" in df else df
             if decision_filter and "sendability_decision" in filtered:
                 filtered = filtered[filtered["sendability_decision"].isin(decision_filter)]
+            if surface_filter and "surface_correctness" in filtered:
+                filtered = filtered[filtered["surface_correctness"].isin(surface_filter)]
             st.caption("Use `human_decision`, `edited_line`, and `edit_reason_category` to turn reviewed rows into a reusable goldset.")
             edited = st.data_editor(
                 filtered,
                 use_container_width=True,
                 height=650,
                 num_rows="fixed",
-                disabled=["sendability_decision", "sendability_score", "sendability_reasons"],
+                disabled=[
+                    "sendability_decision",
+                    "sendability_score",
+                    "sendability_reasons",
+                    "hard_fail_reasons",
+                    "soft_edit_reasons",
+                    "evidence_score",
+                    "copy_quality_score",
+                    "outcome_alignment_score",
+                    "template_fit_score",
+                    "surface_correctness",
+                    "surface_correctness_score",
+                    "surface_correctness_reasons",
+                    "visual_reliability_score",
+                    "sendability_dimensions",
+                ],
                 column_config={
                     "sendability_decision": st.column_config.TextColumn("sendability_decision", width="small"),
                     "sendability_score": st.column_config.NumberColumn("sendability_score", width="small"),
                     "sendability_reasons": st.column_config.TextColumn("sendability_reasons", width="large"),
+                    "hard_fail_reasons": st.column_config.TextColumn("hard_fail_reasons", width="large"),
+                    "soft_edit_reasons": st.column_config.TextColumn("soft_edit_reasons", width="large"),
+                    "evidence_score": st.column_config.NumberColumn("evidence_score", width="small"),
+                    "copy_quality_score": st.column_config.NumberColumn("copy_quality_score", width="small"),
+                    "outcome_alignment_score": st.column_config.NumberColumn("outcome_alignment_score", width="small"),
+                    "template_fit_score": st.column_config.NumberColumn("template_fit_score", width="small"),
+                    "surface_correctness": st.column_config.TextColumn("surface_correctness", width="small"),
+                    "surface_correctness_score": st.column_config.NumberColumn("surface_correctness_score", width="small"),
+                    "surface_correctness_reasons": st.column_config.TextColumn("surface_correctness_reasons", width="large"),
+                    "visual_reliability_score": st.column_config.NumberColumn("visual_reliability_score", width="small"),
+                    "sendability_dimensions": st.column_config.TextColumn("sendability_dimensions", width="large"),
                     "human_decision": st.column_config.SelectboxColumn("human_decision", options=HUMAN_DECISIONS),
                     "edited_line": st.column_config.TextColumn("edited_line", width="large"),
                     "edit_reason_category": st.column_config.SelectboxColumn("edit_reason_category", options=EDIT_REASON_CATEGORIES),
@@ -847,8 +926,13 @@ def main() -> None:
                     updated.loc[mask, "personalized_line"] = updated.loc[mask, "edited_line"]
                     st.session_state["review_df"] = apply_sendability_to_dataframe(updated)
                     st.success(f"Applied edited lines to {int(mask.sum())} rows.")
+            goldset_split = st.selectbox(
+                "Goldset destination",
+                GOLDSET_SPLITS,
+                help="Use reviewed_examples for normal review data, frozen_eval_set for locked regression tests, or candidate_training_set for future tuning examples.",
+            )
             if c2.button("Save reviewed rows to goldset", use_container_width=True):
-                path, count = append_goldset_feedback(st.session_state["review_df"])
+                path, count = append_goldset_feedback(st.session_state["review_df"], split=goldset_split)
                 if count:
                     st.success(f"Saved {count} reviewed rows to {path}")
                 else:
@@ -940,16 +1024,18 @@ def main() -> None:
                             credential_path.unlink(missing_ok=True)
 
             with st.expander("Goldset export for future tuning"):
-                goldset_path, _ = append_goldset_feedback(pd.DataFrame())
-                if goldset_path.exists():
-                    st.download_button(
-                        "Download saved human edits goldset",
-                        goldset_path.read_bytes(),
-                        goldset_path.name,
-                        "text/csv",
-                        use_container_width=True,
-                    )
-                else:
+                summary = load_goldset_summary()
+                st.dataframe(summary, use_container_width=True, hide_index=True)
+                for split, goldset_path in goldset_paths().items():
+                    if goldset_path.exists():
+                        st.download_button(
+                            f"Download {split}",
+                            goldset_path.read_bytes(),
+                            goldset_path.name,
+                            "text/csv",
+                            use_container_width=True,
+                        )
+                if not any(path.exists() for path in goldset_paths().values()):
                     st.caption("No saved goldset yet. Review rows first, then click `Save reviewed rows to goldset`.")
 
     with calibration_tab:

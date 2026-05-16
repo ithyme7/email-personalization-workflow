@@ -49,8 +49,8 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Demo sample mode for low-risk walkthroughs during calls.
 - Batch history with run date, model, cost estimate, ready/review split, and output path.
 - Tone calibration tab for saving client feedback as a reusable profile.
-- Sendability gate with `Send`, `Edit`, and `Reject` decisions before client delivery.
-- Human edit/goldset workflow for saving reviewed rows and learning from client-side edits.
+- Multidimensional sendability gate with hard-fail reasons, soft-edit reasons, evidence score, copy score, outcome score, template-fit score, visual reliability, and surface correctness.
+- Human edit/goldset workflow with reviewed examples, frozen eval examples, and candidate training examples.
 - Client delivery export with a smaller column set for handoff.
 
 ## Public Safety Notes
@@ -146,7 +146,7 @@ The web app supports:
 - run batch button
 - row-level progress bar
 - dashboard with review workload, visual confidence, friction types, quality flags, and estimated model cost
-- sendability dashboard showing Send/Edit/Reject split and reasons
+- sendability dashboard showing Send/Edit/Reject split, hard-fail reasons, soft-edit reasons, and surface correctness
 - batch history
 - tone calibration from client feedback
 - review/edit rows
@@ -198,8 +198,8 @@ The compiled app will be created under `dist/`.
 
 The Excel workbook includes:
 
-- `Dashboard`: sendability split, batch status, review workload, source coverage, visual confidence, friction types, and review reasons.
-- `Review`: the main working tab with sendability decision, personalized line, template preview, evidence, surface type, shareable screenshots, flags, and manual-review notes.
+- `Dashboard`: sendability split, surface correctness, batch status, review workload, source coverage, visual confidence, friction types, and review reasons.
+- `Review`: the main working tab with sendability decision, hard/soft reasons, surface correctness, personalized line, template preview, evidence, shareable screenshots, flags, and manual-review notes.
 - `Research Details`: longer evidence, screenshots, source URLs, visual observations, internal UX validator findings, angle-gate notes, tone profile, and model metadata.
 - `Summary`: basic counts and usage notes.
 
@@ -219,14 +219,16 @@ For client work, the recommended workflow is:
 3. Run a small calibration batch of 10 to 25 leads.
 4. Review weak rows manually, especially app-first companies and low-confidence visual findings.
 5. Use the sendability gate to separate rows into Send, Edit, and Reject.
-6. Mark reviewed rows with a human decision and an edit reason.
-7. Save the reviewed rows to the local goldset.
-8. Ask the client to mark 5 good lines and 5 off-tone lines.
-9. Tune the tone profile before scaling to larger batches.
+6. Check hard-fail reasons separately from soft-edit reasons.
+7. Check surface correctness, especially for app-first companies.
+8. Mark reviewed rows with a human decision and an edit reason.
+9. Save the reviewed rows to the right goldset split.
+10. Ask the client to mark 5 good lines and 5 off-tone lines.
+11. Tune the tone profile before scaling to larger batches.
 
 ## Sendability And Goldset
 
-The sendability layer is stricter than the normal row status. A row can have a generated line and still be marked `Edit` or `Reject` if it has weak evidence, possible unsupported claims, generic wording, technical audit language, low visual confidence, a missing outcome tie, or poor template flow.
+The sendability layer is stricter than the normal row status. A row can have a generated line and still be marked `Edit` or `Reject` if it has weak evidence, possible unsupported claims, generic wording, technical audit language, low visual confidence, a missing outcome tie, poor template flow, or the wrong research surface.
 
 Decisions:
 
@@ -234,13 +236,30 @@ Decisions:
 - `Edit`: promising, but needs a human pass before sending.
 - `Reject`: do not send yet; evidence or copy is not reliable enough.
 
-In the web app, use `human_decision`, `edited_line`, `edit_reason_category`, and `edit_notes` in the Review tab. Click `Save reviewed rows to goldset` to append reviewed examples to:
+The gate is multidimensional:
+
+- `hard_fail_reasons`: evidence or safety problems that should block sending.
+- `soft_edit_reasons`: tone, length, flow, or confidence issues that can usually be fixed.
+- `evidence_score`: source and evidence sufficiency.
+- `copy_quality_score`: wording, length, genericness, and banned phrasing.
+- `outcome_alignment_score`: connection to activation, conversion, retention, bookings, signup completion, or drop-off.
+- `template_fit_score`: whether the line naturally flows into the campaign template.
+- `surface_correctness`: whether the selected surface matches the product type.
+- `visual_reliability_score`: how reliable the visual/UX finding is.
+
+In the web app, use `human_decision`, `edited_line`, `edit_reason_category`, and `edit_notes` in the Review tab. Click `Save reviewed rows to goldset` to append reviewed examples to one of three local splits:
 
 ```text
-data/goldset/human_edits.csv
+data/goldset/reviewed_examples.csv
+data/goldset/frozen_eval_set.csv
+data/goldset/candidate_training_set.csv
 ```
 
-That file becomes a reusable learning set for tone calibration, prompt tuning, and model comparison.
+- `reviewed_examples`: normal reviewed rows and client feedback.
+- `frozen_eval_set`: locked regression examples used to compare prompts/models over time.
+- `candidate_training_set`: examples that may later be useful for fine-tuning or preference tuning.
+
+These files become the reusable learning set for tone calibration, prompt tuning, model comparison, and future pairwise evaluation.
 
 Useful internal docs:
 
@@ -248,6 +267,7 @@ Useful internal docs:
 - `docs/GO_TO_MARKET.md`
 - `docs/SECURITY_PRIVACY.md`
 - `docs/QUALITY_BENCHMARK.md`
+- `docs/GOLDSET_EVALS.md`
 - `docs/DEMO_SCRIPT.md`
 - `docs/WEB_APP_USAGE_NL.md`
 

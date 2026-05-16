@@ -57,6 +57,17 @@ De app maakt nu onderscheid tussen gewone status en sendability:
 
 De gate let onder andere op unsupported claims, em dashes, genericness, technische audit-taal, verkeerde surface, te lange zinnen, ontbrekende outcome-link en lage visual confidence.
 
+De gate is opgesplitst in meerdere dimensies:
+
+- `hard_fail_reasons`: redenen waardoor je de line niet moet versturen.
+- `soft_edit_reasons`: redenen waardoor de line nog bewerkt moet worden.
+- `evidence_score`: hoe sterk de bron/evidence is.
+- `copy_quality_score`: hoe goed de line zelf leest.
+- `outcome_alignment_score`: link met activation, conversion, bookings, retention of drop-off.
+- `template_fit_score`: of de line logisch doorloopt in de pitch.
+- `surface_correctness`: of de gekozen observatie past bij het type bedrijf/product.
+- `visual_reliability_score`: hoe betrouwbaar de visuele/UX-observatie is.
+
 ## Human edit goldset
 
 In `Review & Edit` kun je per rij aangeven wat jij als mens beslist:
@@ -66,13 +77,21 @@ In `Review & Edit` kun je per rij aangeven wat jij als mens beslist:
 - `edit_reason_category`
 - `edit_notes`
 
+Kies daarna waar je de review wilt opslaan:
+
+- `reviewed_examples`: normale menselijke reviewdata.
+- `frozen_eval_set`: vaste testset om nieuwe prompts/modellen tegen te meten.
+- `candidate_training_set`: voorbeelden die later mogelijk bruikbaar zijn voor training/fine-tuning.
+
 Klik daarna op `Save reviewed rows to goldset`. De app bewaart die voorbeelden lokaal in:
 
 ```text
-data/goldset/human_edits.csv
+data/goldset/reviewed_examples.csv
+data/goldset/frozen_eval_set.csv
+data/goldset/candidate_training_set.csv
 ```
 
-Die goldset kun je later gebruiken om de tone profiles, prompts of modelkeuze te verbeteren.
+Die goldset kun je later gebruiken om tone profiles, prompts, modelkeuze en pairwise evaluaties te verbeteren.
 
 ## Google Sheets
 

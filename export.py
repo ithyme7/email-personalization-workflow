@@ -22,6 +22,17 @@ CLIENT_REVIEW_COLUMNS = [
     "sendability_decision",
     "sendability_score",
     "sendability_reasons",
+    "hard_fail_reasons",
+    "soft_edit_reasons",
+    "evidence_score",
+    "copy_quality_score",
+    "outcome_alignment_score",
+    "template_fit_score",
+    "surface_correctness",
+    "surface_correctness_score",
+    "surface_correctness_reasons",
+    "visual_reliability_score",
+    "sendability_dimensions",
     "human_decision",
     "edited_line",
     "edit_reason_category",
@@ -58,6 +69,9 @@ CLIENT_REVIEW_COLUMNS = [
     "llm_calls",
     "estimated_input_tokens",
     "estimated_output_tokens",
+    "tone_profile",
+    "model_provider",
+    "model_name",
 ]
 
 CLIENT_RESEARCH_COLUMNS = [
@@ -254,6 +268,9 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
             "llm_calls": row.get("llm_calls", ""),
             "estimated_input_tokens": row.get("estimated_input_tokens", ""),
             "estimated_output_tokens": row.get("estimated_output_tokens", ""),
+            "tone_profile": row.get("tone_profile", ""),
+            "model_provider": row.get("model_provider", ""),
+            "model_name": row.get("model_name", ""),
         }
         review_row.update(evaluate_sendability(review_row))
         review_row.setdefault("human_decision", "unreviewed")
@@ -370,6 +387,9 @@ def _summary_rows(review_rows: list[dict[str, Any]], research_rows: list[dict[st
     sendable = sum(1 for row in review_rows if row.get("sendability_decision") == "Send")
     edit_needed = sum(1 for row in review_rows if row.get("sendability_decision") == "Edit")
     reject_needed = sum(1 for row in review_rows if row.get("sendability_decision") == "Reject")
+    surface_correct = sum(1 for row in review_rows if row.get("surface_correctness") == "Correct")
+    surface_review = sum(1 for row in review_rows if row.get("surface_correctness") == "Review")
+    surface_wrong = sum(1 for row in review_rows if row.get("surface_correctness") == "Wrong")
     generated = sum(
         1
         for row in review_rows
@@ -393,6 +413,9 @@ def _summary_rows(review_rows: list[dict[str, Any]], research_rows: list[dict[st
         {"metric": "Sendability: Send", "value": str(sendable)},
         {"metric": "Sendability: Edit", "value": str(edit_needed)},
         {"metric": "Sendability: Reject", "value": str(reject_needed)},
+        {"metric": "Surface correctness: Correct", "value": str(surface_correct)},
+        {"metric": "Surface correctness: Review", "value": str(surface_review)},
+        {"metric": "Surface correctness: Wrong", "value": str(surface_wrong)},
         {"metric": "Rows needing review", "value": str(review_needed)},
         {"metric": "Research-only rows", "value": str(research_only)},
         {"metric": "Rows with source URLs", "value": str(sources)},
@@ -623,6 +646,8 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
     sendable = sum(1 for row in review_rows if row.get("sendability_decision") == "Send")
     edit_needed = sum(1 for row in review_rows if row.get("sendability_decision") == "Edit")
     reject_needed = sum(1 for row in review_rows if row.get("sendability_decision") == "Reject")
+    avg_evidence = round(sum(_numeric_values(review_rows, "evidence_score")) / len(_numeric_values(review_rows, "evidence_score")), 1) if _numeric_values(review_rows, "evidence_score") else 0
+    avg_surface = round(sum(_numeric_values(review_rows, "surface_correctness_score")) / len(_numeric_values(review_rows, "surface_correctness_score")), 1) if _numeric_values(review_rows, "surface_correctness_score") else 0
     generated = sum(
         1
         for row in review_rows
@@ -647,8 +672,8 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
     _kpi_card(ws, "H6:I8", "Edit", str(edit_needed), "Needs light human edit", ACCENT_ORANGE)
     _kpi_card(ws, "K6:L8", "Reject", str(reject_needed), "Do not send yet", ACCENT_RED)
     _kpi_card(ws, "B10:C12", "Generated Lines", str(generated), "Rows with personalization", ACCENT_PURPLE)
-    _kpi_card(ws, "E10:F12", "Source Coverage", str(sources), "Rows with source URLs", ACCENT_BLUE)
-    _kpi_card(ws, "H10:I12", "Avg QC", str(avg_quality or "-"), "Personalization quality score", ACCENT_YELLOW)
+    _kpi_card(ws, "E10:F12", "Evidence", str(avg_evidence or "-"), "Avg evidence score", ACCENT_BLUE)
+    _kpi_card(ws, "H10:I12", "Surface", str(avg_surface or "-"), "Avg surface score", ACCENT_YELLOW)
     visual_conf_counts = Counter(str(row.get("visual_confidence", "") or "none").lower() for row in review_rows)
     strongest_visual = max(["high", "medium", "low", "none"], key=lambda key: visual_conf_counts.get(key, 0))
     _kpi_card(ws, "K10:L12", "Visual Signal", strongest_visual.title(), "Most common confidence", ACCENT_GREEN if strongest_visual == "high" else ACCENT_ORANGE)
@@ -662,6 +687,7 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
         ("Reject", reject_needed),
     ]
     sendability_rows = [row for row in sendability_rows if row[1] > 0]
+    surface_rows = [(label, count) for label, count in Counter(row.get("surface_correctness", "") for row in review_rows).items() if label]
     confidence_rows = [
         ("High", visual_conf_counts.get("high", 0)),
         ("Medium", visual_conf_counts.get("medium", 0)),
@@ -678,8 +704,8 @@ def _write_dashboard(ws, review_rows: list[dict[str, Any]], research_rows: list[
     _section_title(ws, "B15", "Sendability Gate", "Rows are separated into send, edit, and reject before delivery.")
     _write_metric_bars(ws, 17, 2, "Sendability distribution", sendability_rows or [("No rows", 0)], "decision", ACCENT_GREEN)
 
-    _section_title(ws, "H15", "Visual Confidence", "Reliability of automated visual findings.")
-    _write_metric_bars(ws, 17, 8, "Visual confidence", confidence_rows or [("None", 0)], "confidence", ACCENT_BLUE)
+    _section_title(ws, "H15", "Surface Correctness", "Whether the selected surface matches the product type.")
+    _write_metric_bars(ws, 17, 8, "Surface correctness", surface_rows or [("Unknown", 0)], "surface", ACCENT_BLUE)
 
     _section_title(ws, "B28", "Top Friction Types", "The angle gate should prefer current conversion or UX friction.")
     _write_metric_bars(ws, 30, 2, "Friction type ranking", friction_rows or [("No friction selected", 0)], "friction type", ACCENT_ORANGE)
@@ -712,9 +738,9 @@ def _write_readable_xlsx(rows: list[dict[str, Any]], output_path: Path) -> None:
     _write_sheet(ws, CLIENT_REVIEW_COLUMNS, review_rows)
     _style_sheet(
         ws,
-        [14, 14, 12, 48, 16, 70, 22, 42, 22, 20, 72, 78, 24, 24, 24, 28, 26, 64, 28, 18, 72, 52, 16, 26, 56, 24, 30, 48],
+        [14, 14, 12, 48, 42, 42, 12, 12, 12, 12, 14, 12, 44, 12, 48, 16, 70, 22, 20, 72, 78, 24, 24, 24, 28, 26, 64, 28, 18, 72, 52, 16, 26, 56, 24, 30, 48],
         row_height=88,
-        freeze="K2",
+        freeze="T2",
     )
     _style_review_status(ws)
 

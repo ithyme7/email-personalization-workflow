@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -13,6 +14,17 @@ SENDABILITY_COLUMNS = [
     "sendability_decision",
     "sendability_score",
     "sendability_reasons",
+    "hard_fail_reasons",
+    "soft_edit_reasons",
+    "evidence_score",
+    "copy_quality_score",
+    "outcome_alignment_score",
+    "template_fit_score",
+    "surface_correctness",
+    "surface_correctness_score",
+    "surface_correctness_reasons",
+    "visual_reliability_score",
+    "sendability_dimensions",
     "human_decision",
     "edited_line",
     "edit_reason_category",
@@ -34,32 +46,52 @@ EDIT_REASON_CATEGORIES = [
     "unsupported_claim",
     "bad_pitch_flow",
     "visual_evidence_uncertain",
+    "surface_uncertain",
     "other",
 ]
 
+GOLDSET_SPLITS = ["reviewed_examples", "frozen_eval_set", "candidate_training_set"]
+
 GOLDSET_COLUMNS = [
     "created_at",
+    "goldset_split",
+    "is_frozen_eval_example",
+    "is_training_candidate",
     "company",
     "person",
     "role",
     "website",
     "original_line",
     "edited_line",
+    "preferred_line",
+    "non_preferred_line",
     "human_decision",
     "edit_reason_category",
     "edit_notes",
     "sendability_decision",
     "sendability_score",
     "sendability_reasons",
+    "hard_fail_reasons",
+    "soft_edit_reasons",
+    "evidence_score",
+    "copy_quality_score",
+    "outcome_alignment_score",
+    "template_fit_score",
+    "surface_correctness",
+    "surface_correctness_score",
+    "surface_correctness_reasons",
+    "visual_reliability_score",
     "evidence_found",
+    "evidence_refs",
     "quality_flags",
     "visual_confidence",
     "friction_type",
-    "surface_checked",
+    "surface_used",
     "conversion_outcome",
-    "product_surface_type",
+    "product_type",
     "tone_profile",
-    "model_name",
+    "writer_model",
+    "judge_model",
 ]
 
 SEVERE_FLAGS = {
@@ -116,6 +148,9 @@ OUTCOME_TERMS = {
     "trial",
     "install",
     "download",
+    "book",
+    "bouncing",
+    "bounce",
 }
 
 CONVERSATIONAL_STARTS = (
@@ -149,6 +184,46 @@ VISUAL_CLAIM_TERMS = {
     "easy to miss",
     "broken",
 }
+
+APP_SURFACE_TERMS = {
+    "app",
+    "mobile app",
+    "app store",
+    "google play",
+    "play store",
+    "onboarding",
+    "signup",
+    "sign-up",
+    "sign up",
+    "paywall",
+    "subscription",
+    "access code",
+    "download",
+    "install",
+    "first screen",
+    "first session",
+    "review",
+    "rating",
+    "screenshots",
+}
+
+WEBSITE_SURFACE_TERMS = {
+    "website",
+    "landing page",
+    "homepage",
+    "site",
+    "page",
+    "cta",
+    "form",
+    "demo",
+    "case study",
+    "testimonial",
+    "proof",
+}
+
+BOOKING_TERMS = {"booking", "book", "slot", "availability", "appointment", "reservation", "calendar"}
+COMMERCE_TERMS = {"checkout", "cart", "buy", "purchase", "product page", "shipping", "price", "subscription"}
+B2B_TERMS = {"demo", "case study", "testimonial", "proof", "roi", "customer", "sales", "lead"}
 
 
 def _text(value: Any) -> str:
@@ -191,82 +266,263 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
-def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
-    line = _text(row.get("personalized_line") or row.get("opening_line"))
+def _score_from_penalties(base: int, penalties: list[int]) -> int:
+    return max(0, min(100, base - sum(penalties)))
+
+
+def evaluate_evidence(row: Mapping[str, Any]) -> tuple[int, list[str], list[str]]:
     evidence = _text(row.get("evidence_found") or row.get("evidence_used_for_copy") or row.get("evidence_points"))
     source_urls = _text(row.get("source_urls"))
-    status = _lower(row.get("status"))
-    quality_flags = _split_flags(row.get("quality_flags"))
-    visual_flags = _split_flags(row.get("visual_flags") or row.get("visual_quality_flags"))
+    screenshots = _text(row.get("shareable_screenshots") or row.get("screenshots") or row.get("screenshot_paths"))
     visual_confidence = _lower(row.get("visual_confidence"))
-    product_surface = _lower(row.get("product_surface_type"))
+    quality_flags = _split_flags(row.get("quality_flags"))
 
-    reject_reasons: list[str] = []
-    edit_reasons: list[str] = []
-    score = 100
+    hard: list[str] = []
+    soft: list[str] = []
+    score = 25
+
+    if not evidence:
+        hard.append("missing_evidence")
+        return 0, hard, soft
+    score += 25
+    if source_urls:
+        score += 20
+    else:
+        soft.append("source_url_missing")
+    if screenshots:
+        score += 10
+    if visual_confidence == "high":
+        score += 15
+    elif visual_confidence == "medium":
+        score += 8
+    elif visual_confidence == "low":
+        soft.append("low_visual_confidence")
+        score -= 8
+    if "weak_evidence" in quality_flags or "thin_content" in quality_flags:
+        soft.append("weak_evidence")
+        score -= 15
+    if "unsupported_claims" in quality_flags or "unsupported_claim" in quality_flags:
+        hard.append("unsupported_claim")
+        score -= 35
+    return max(0, min(100, score)), hard, soft
+
+
+def evaluate_copy_quality(row: Mapping[str, Any]) -> tuple[int, list[str], list[str]]:
+    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    quality_flags = _split_flags(row.get("quality_flags"))
+    hard: list[str] = []
+    soft: list[str] = []
+    penalties: list[int] = []
 
     if not line or line.startswith("["):
-        reject_reasons.append("no_sendable_personalized_line")
-        score -= 45
-    if status == "research only" or "research_only" in quality_flags:
-        reject_reasons.append("research_only")
-        score -= 30
-    if not evidence:
-        reject_reasons.append("missing_evidence")
-        score -= 25
-    if not source_urls and not _text(row.get("shareable_screenshots")):
-        edit_reasons.append("source_or_screenshot_missing")
-        score -= 10
-
-    severe_matches = sorted(flag for flag in quality_flags if flag in SEVERE_FLAGS)
-    if severe_matches:
-        reject_reasons.extend(severe_matches)
-        score -= 20 * len(severe_matches)
-
-    edit_matches = sorted(flag for flag in quality_flags if flag in EDIT_FLAGS)
-    if edit_matches:
-        edit_reasons.extend(edit_matches)
-        score -= 10 * len(edit_matches)
-
-    if _is_yes(row.get("needs_manual_review")):
-        edit_reasons.append("marked_for_manual_review")
-        score -= 12
+        hard.append("no_sendable_personalized_line")
+        penalties.append(60)
     if "—" in line or "–" in line:
-        reject_reasons.append("dash_character_in_line")
-        score -= 25
-    if _word_count(line) > 38:
-        edit_reasons.append("too_long")
-        score -= 10
-    if line and not _has_any(line, OUTCOME_TERMS):
-        edit_reasons.append("missing_activation_conversion_or_dropoff_outcome")
-        score -= 12
+        hard.append("dash_character_in_line")
+        penalties.append(35)
+    words = _word_count(line)
+    if words > 42:
+        soft.append("far_too_long")
+        penalties.append(20)
+    elif words > 35:
+        soft.append("slightly_too_long")
+        penalties.append(10)
     if line and not _lower(line).startswith(CONVERSATIONAL_STARTS):
-        edit_reasons.append("missing_conversational_opening")
-        score -= 8
-    if "app_first" in product_surface and _has_any(line, {"website", "landing page", "blog"}) and "app" not in _lower(line):
-        edit_reasons.append("app_first_but_line_uses_website_surface")
-        score -= 12
-    if _has_any(line, VISUAL_CLAIM_TERMS) and visual_confidence in {"", "none", "low"}:
-        edit_reasons.append("visual_claim_needs_manual_check")
-        score -= 12
-    if visual_flags and visual_confidence == "low":
-        edit_reasons.append("low_confidence_visual_finding")
-        score -= 8
+        soft.append("missing_conversational_opening")
+        penalties.append(10)
+    if any(flag in quality_flags for flag in {"genericness", "generic", "too_generic"}):
+        soft.append("too_generic")
+        penalties.append(15)
+    if "technical_audit_language" in quality_flags:
+        soft.append("technical_audit_language")
+        penalties.append(15)
+    if "hallucination" in quality_flags:
+        hard.append("hallucination")
+        penalties.append(45)
+    return _score_from_penalties(100, penalties), hard, soft
 
-    score = max(0, min(100, score))
-    reasons = _dedupe(reject_reasons + edit_reasons)
 
-    if reject_reasons:
+def evaluate_outcome_alignment(row: Mapping[str, Any]) -> tuple[int, list[str]]:
+    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    outcome = _text(row.get("conversion_outcome"))
+    combined = f"{line} {outcome}"
+    if not line:
+        return 0, ["missing_line"]
+    if _has_any(combined, OUTCOME_TERMS):
+        return 100, []
+    return 55, ["missing_activation_conversion_or_dropoff_outcome"]
+
+
+def evaluate_template_fit(row: Mapping[str, Any]) -> tuple[int, list[str]]:
+    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    if not line or line.startswith("["):
+        return 0, ["missing_line"]
+    penalties: list[int] = []
+    reasons: list[str] = []
+    if not _lower(line).startswith(CONVERSATIONAL_STARTS):
+        reasons.append("missing_conversational_opening")
+        penalties.append(15)
+    if _word_count(line) > 35:
+        reasons.append("template_line_too_long")
+        penalties.append(12)
+    if not _has_any(line, OUTCOME_TERMS):
+        reasons.append("pitch_bridge_unclear")
+        penalties.append(18)
+    if line.endswith("?"):
+        reasons.append("question_opening_may_break_template_flow")
+        penalties.append(8)
+    return _score_from_penalties(100, penalties), reasons
+
+
+def evaluate_visual_reliability(row: Mapping[str, Any]) -> tuple[int, list[str]]:
+    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    visual_confidence = _lower(row.get("visual_confidence"))
+    visual_flags = _split_flags(row.get("visual_flags") or row.get("visual_quality_flags"))
+    screenshots = _text(row.get("shareable_screenshots") or row.get("screenshots") or row.get("screenshot_paths"))
+    reasons: list[str] = []
+    if not visual_flags and not _has_any(line, VISUAL_CLAIM_TERMS):
+        return 80, []
+    score_by_confidence = {"high": 95, "medium": 78, "low": 45, "none": 35, "": 35}
+    score = score_by_confidence.get(visual_confidence, 50)
+    if not screenshots:
+        reasons.append("visual_claim_without_shareable_screenshot")
+        score -= 15
+    if visual_confidence in {"", "none", "low"}:
+        reasons.append("visual_claim_needs_manual_check")
+    return max(0, min(100, score)), reasons
+
+
+def evaluate_surface_correctness(row: Mapping[str, Any]) -> tuple[str, int, list[str], bool]:
+    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    evidence = _text(row.get("evidence_found") or row.get("evidence_used_for_copy") or row.get("evidence_points"))
+    surface_checked = _text(row.get("surface_checked"))
+    research_priority = _text(row.get("research_priority"))
+    product_surface = _lower(row.get("product_surface_type"))
+    combined = f"{line} {evidence} {surface_checked} {research_priority}".lower()
+    line_lower = line.lower()
+
+    reasons: list[str] = []
+    hard_wrong = False
+    if not product_surface:
+        return "Unknown", 65, ["product_surface_type_missing"], False
+
+    if product_surface == "app_first_product":
+        has_app_surface = _has_any(combined, APP_SURFACE_TERMS)
+        website_line = _has_any(line_lower, {"website", "landing page", "homepage", "blog"}) and "app" not in line_lower
+        if website_line:
+            reasons.append("app_first_product_but_line_uses_website_or_blog_surface")
+            hard_wrong = True
+            return "Wrong", 25, reasons, hard_wrong
+        if has_app_surface:
+            return "Correct", 95, [], False
+        return "Review", 60, ["app_first_product_without_clear_app_surface"], False
+
+    if product_surface == "marketplace_booking_flow":
+        if _has_any(combined, BOOKING_TERMS):
+            return "Correct", 95, [], False
+        return "Review", 62, ["booking_flow_without_booking_surface"], False
+
+    if product_surface == "commerce_product_page":
+        if _has_any(combined, COMMERCE_TERMS):
+            return "Correct", 92, [], False
+        return "Review", 62, ["commerce_product_without_checkout_or_product_page_surface"], False
+
+    if product_surface == "b2b_service":
+        if _has_any(combined, B2B_TERMS | WEBSITE_SURFACE_TERMS):
+            return "Correct", 88, [], False
+        return "Review", 65, ["b2b_service_surface_unclear"], False
+
+    if product_surface == "website_first_leadgen":
+        if _has_any(combined, WEBSITE_SURFACE_TERMS | B2B_TERMS):
+            return "Correct", 90, [], False
+        if _has_any(line_lower, APP_SURFACE_TERMS):
+            reasons.append("website_first_leadgen_but_line_uses_app_surface")
+            return "Review", 55, reasons, False
+        return "Review", 65, ["website_first_surface_unclear"], False
+
+    return "Review", 60, [f"unknown_product_surface_type:{product_surface}"], False
+
+
+def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
+    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    status = _lower(row.get("status"))
+    quality_flags = _split_flags(row.get("quality_flags"))
+
+    evidence_score, evidence_hard, evidence_soft = evaluate_evidence(row)
+    copy_score, copy_hard, copy_soft = evaluate_copy_quality(row)
+    outcome_score, outcome_reasons = evaluate_outcome_alignment(row)
+    template_score, template_reasons = evaluate_template_fit(row)
+    visual_score, visual_reasons = evaluate_visual_reliability(row)
+    surface_label, surface_score, surface_reasons, surface_hard = evaluate_surface_correctness(row)
+
+    hard_reasons: list[str] = []
+    soft_reasons: list[str] = []
+
+    if status == "research only" or "research_only" in quality_flags:
+        hard_reasons.append("research_only")
+    if _is_yes(row.get("needs_manual_review")):
+        soft_reasons.append("marked_for_manual_review")
+    severe_matches = sorted(flag for flag in quality_flags if flag in SEVERE_FLAGS)
+    edit_matches = sorted(flag for flag in quality_flags if flag in EDIT_FLAGS)
+    hard_reasons.extend(severe_matches)
+    soft_reasons.extend(edit_matches)
+    hard_reasons.extend(evidence_hard)
+    hard_reasons.extend(copy_hard)
+    soft_reasons.extend(evidence_soft)
+    soft_reasons.extend(copy_soft)
+    soft_reasons.extend(outcome_reasons)
+    soft_reasons.extend(template_reasons)
+    soft_reasons.extend(visual_reasons)
+    soft_reasons.extend(surface_reasons)
+    if surface_hard:
+        hard_reasons.extend(surface_reasons)
+
+    hard_reasons = _dedupe(hard_reasons)
+    soft_reasons = _dedupe([reason for reason in soft_reasons if reason not in hard_reasons])
+
+    weighted_score = round(
+        evidence_score * 0.25
+        + copy_score * 0.22
+        + outcome_score * 0.16
+        + template_score * 0.14
+        + surface_score * 0.16
+        + visual_score * 0.07
+    )
+    if not line:
+        weighted_score = min(weighted_score, 20)
+    if hard_reasons:
+        weighted_score = min(weighted_score, 59)
+    elif soft_reasons:
+        weighted_score = min(weighted_score, 84)
+    score = max(0, min(100, weighted_score))
+
+    if hard_reasons:
         decision = "Reject"
-    elif edit_reasons or score < 85:
+    elif soft_reasons or score < 85:
         decision = "Edit"
     else:
         decision = "Send"
 
+    reasons = _dedupe(hard_reasons + soft_reasons)
+    dimensions = (
+        f"evidence={evidence_score}; copy={copy_score}; outcome={outcome_score}; "
+        f"template={template_score}; surface={surface_score}; visual={visual_score}"
+    )
     return {
         "sendability_decision": decision,
         "sendability_score": score,
         "sendability_reasons": " | ".join(reasons),
+        "hard_fail_reasons": " | ".join(hard_reasons),
+        "soft_edit_reasons": " | ".join(soft_reasons),
+        "evidence_score": evidence_score,
+        "copy_quality_score": copy_score,
+        "outcome_alignment_score": outcome_score,
+        "template_fit_score": template_score,
+        "surface_correctness": surface_label,
+        "surface_correctness_score": surface_score,
+        "surface_correctness_reasons": " | ".join(surface_reasons),
+        "visual_reliability_score": visual_score,
+        "sendability_dimensions": dimensions,
     }
 
 
@@ -300,32 +556,107 @@ def apply_sendability_to_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
     return enriched
 
 
-def rows_for_goldset(df: pd.DataFrame) -> pd.DataFrame:
+def goldset_path(split: str = "reviewed_examples") -> Path:
+    if split not in GOLDSET_SPLITS:
+        raise ValueError(f"Unknown goldset split: {split}")
+    return DATA_DIR / "goldset" / f"{split}.csv"
+
+
+def goldset_paths() -> dict[str, Path]:
+    return {split: goldset_path(split) for split in GOLDSET_SPLITS}
+
+
+def _preferred_line(row: Mapping[str, Any]) -> str:
+    human_decision = _lower(row.get("human_decision"))
+    edited = _text(row.get("edited_line"))
+    original = _text(row.get("personalized_line") or row.get("opening_line"))
+    if human_decision in {"send", "edit"}:
+        return edited or original
+    return ""
+
+
+def _non_preferred_line(row: Mapping[str, Any]) -> str:
+    human_decision = _lower(row.get("human_decision"))
+    edited = _text(row.get("edited_line"))
+    original = _text(row.get("personalized_line") or row.get("opening_line"))
+    if human_decision == "reject":
+        return original
+    if edited and edited != original:
+        return original
+    return ""
+
+
+def rows_for_goldset(df: pd.DataFrame, split: str = "reviewed_examples") -> pd.DataFrame:
+    if split not in GOLDSET_SPLITS:
+        raise ValueError(f"Unknown goldset split: {split}")
     if df.empty or "human_decision" not in df:
         return pd.DataFrame(columns=GOLDSET_COLUMNS)
-    mask = df["human_decision"].fillna("unreviewed").astype(str).str.lower().ne("unreviewed")
-    selected = df.loc[mask].copy()
+    enriched = apply_sendability_to_dataframe(df)
+    mask = enriched["human_decision"].fillna("unreviewed").astype(str).str.lower().ne("unreviewed")
+    selected = enriched.loc[mask].copy()
     if selected.empty:
         return pd.DataFrame(columns=GOLDSET_COLUMNS)
 
     selected["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    selected["goldset_split"] = split
+    selected["is_frozen_eval_example"] = "yes" if split == "frozen_eval_set" else "no"
+    selected["is_training_candidate"] = "yes" if split == "candidate_training_set" else "no"
     selected["original_line"] = selected.get("personalized_line", "")
-    selected["tone_profile"] = selected.get("tone_profile", "")
-    selected["model_name"] = selected.get("model_name", "")
+    selected["preferred_line"] = selected.apply(lambda row: _preferred_line(row.to_dict()), axis=1)
+    selected["non_preferred_line"] = selected.apply(lambda row: _non_preferred_line(row.to_dict()), axis=1)
+    selected["surface_used"] = selected.get("surface_checked", "")
+    selected["product_type"] = selected.get("product_surface_type", "")
+    source_urls = selected["source_urls"].astype(str) if "source_urls" in selected else pd.Series([""] * len(selected), index=selected.index)
+    screenshots = (
+        selected["shareable_screenshots"].astype(str)
+        if "shareable_screenshots" in selected
+        else pd.Series([""] * len(selected), index=selected.index)
+    )
+    selected["evidence_refs"] = source_urls + " | " + screenshots
+    selected["writer_model"] = selected.get("model_name", "")
+    selected["judge_model"] = "deterministic_sendability_gate_v2"
     for column in GOLDSET_COLUMNS:
         if column not in selected:
             selected[column] = ""
     return selected[GOLDSET_COLUMNS]
 
 
-def append_goldset_feedback(df: pd.DataFrame, path: Path | None = None) -> tuple[Path, int]:
-    path = path or DATA_DIR / "goldset" / "human_edits.csv"
+def append_goldset_feedback(df: pd.DataFrame, split: str = "reviewed_examples", path: Path | None = None) -> tuple[Path, int]:
+    path = path or goldset_path(split)
     path.parent.mkdir(parents=True, exist_ok=True)
-    rows = rows_for_goldset(df)
+    rows = rows_for_goldset(df, split=split)
     if rows.empty:
         return path, 0
     if path.exists():
         existing = pd.read_csv(path, dtype=str).fillna("")
-        rows = pd.concat([existing, rows], ignore_index=True)
+        for column in GOLDSET_COLUMNS:
+            if column not in existing:
+                existing[column] = ""
+        rows = pd.concat([existing[GOLDSET_COLUMNS], rows], ignore_index=True)
     rows.to_csv(path, index=False, encoding="utf-8-sig")
-    return path, len(rows_for_goldset(df))
+    return path, len(rows_for_goldset(df, split=split))
+
+
+def load_goldset_summary() -> pd.DataFrame:
+    records: list[dict[str, Any]] = []
+    for split, path in goldset_paths().items():
+        if not path.exists():
+            records.append({"split": split, "rows": 0, "send": 0, "edit": 0, "reject": 0, "top_reason": ""})
+            continue
+        df = pd.read_csv(path, dtype=str).fillna("")
+        decisions = df.get("human_decision", pd.Series(dtype=str)).str.lower()
+        reason_counter: Counter[str] = Counter()
+        for value in df.get("edit_reason_category", pd.Series(dtype=str)).tolist():
+            if value and value != "not_reviewed":
+                reason_counter[str(value)] += 1
+        records.append(
+            {
+                "split": split,
+                "rows": len(df),
+                "send": int((decisions == "send").sum()),
+                "edit": int((decisions == "edit").sum()),
+                "reject": int((decisions == "reject").sum()),
+                "top_reason": reason_counter.most_common(1)[0][0] if reason_counter else "",
+            }
+        )
+    return pd.DataFrame(records)
