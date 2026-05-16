@@ -1,0 +1,4 @@
+company_name,website_url,linkedin_url,recipient_name,recipient_role,campaign_context,optional_notes,linkedin_observation,linkedin_source_note,app_store_url,app_flow_observation,app_flow_source_note,screenshot_url,recent_news_url,recent_news_note,competitor_context
+FitRooms,https://example.com,,Alex Morgan,Founder,"Help mobile app teams find signup and booking drop-off","Fictional sample row. Replace with real company data before running.",,,,,,,,
+SleepWorks,https://example.org,,Maya Chen,Head of Product,"Help mobile app teams improve activation and conversion","Fictional sample row with optional notes.",,,,,,,,
+Journally,https://example.net,,Sam Patel,Growth Lead,"Help mobile app teams find onboarding friction","Duplicate-style fictional sample.",,,,,,,,

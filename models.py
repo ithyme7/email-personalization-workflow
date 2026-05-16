@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+OUTPUT_COLUMNS = [
+    "company_name",
+    "website_url",
+    "linkedin_url",
+    "recipient_name",
+    "recipient_role",
+    "campaign_context",
+    "linkedin_observation",
+    "linkedin_source_note",
+    "app_store_url",
+    "app_store_summary",
+    "app_flow_observation",
+    "app_flow_source_note",
+    "screenshot_url",
+    "recent_news_url",
+    "recent_news_note",
+    "competitor_context",
+    "friction_checklist",
+    "app_check_status",
+    "recommended_manual_check",
+    "template_preview",
+    "visual_observations",
+    "visual_quality_flags",
+    "visual_confidence",
+    "visual_confidence_score",
+    "visual_confidence_reasons",
+    "screenshot_paths",
+    "friction_type",
+    "surface_checked",
+    "conversion_outcome",
+    "angle_gate_decision",
+    "angle_gate_notes",
+    "blocked_angles",
+    "angle_priority",
+    "blog_used",
+    "why_this_angle",
+    "raw_research_summary",
+    "evidence_points",
+    "evidence_used_for_copy",
+    "chosen_angle",
+    "opening_line",
+    "tailored_insight",
+    "confidence_score",
+    "evidence_strength_score",
+    "personalization_quality_score",
+    "send_confidence",
+    "quality_flags",
+    "source_urls",
+    "needs_manual_review",
+    "reviewer_notes",
+]
+
+
+@dataclass
+class LeadInput:
+    company_name: str
+    website_url: str
+    linkedin_url: str = ""
+    recipient_name: str = ""
+    recipient_role: str = ""
+    campaign_context: str = ""
+    optional_notes: str = ""
+    linkedin_observation: str = ""
+    linkedin_source_note: str = ""
+    app_store_url: str = ""
+    app_flow_observation: str = ""
+    app_flow_source_note: str = ""
+    screenshot_url: str = ""
+    recent_news_url: str = ""
+    recent_news_note: str = ""
+    competitor_context: str = ""
+    is_valid: bool = True
+    validation_errors: list[str] = field(default_factory=list)
+    is_duplicate: bool = False
+
+
+@dataclass
+class DeepResearchResult:
+    app_store_url: str = ""
+    app_store_summary: str = ""
+    linkedin_observation: str = ""
+    linkedin_source_note: str = ""
+    app_flow_observation: str = ""
+    app_flow_source_note: str = ""
+    screenshot_url: str = ""
+    recent_news_url: str = ""
+    recent_news_note: str = ""
+    competitor_context: str = ""
+    friction_checklist: list[str] = field(default_factory=list)
+    source_urls: list[str] = field(default_factory=list)
+    reviewer_notes: list[str] = field(default_factory=list)
+
+    def to_prompt_text(self) -> str:
+        sections = []
+        if self.linkedin_observation:
+            sections.append(f"LinkedIn observation supplied by reviewer: {self.linkedin_observation}")
+        if self.linkedin_source_note:
+            sections.append(f"LinkedIn source note: {self.linkedin_source_note}")
+        if self.app_store_summary:
+            sections.append(f"Public app-store or app listing evidence: {self.app_store_summary}")
+        if self.app_flow_observation:
+            sections.append(f"Manual app/onboarding observation supplied by reviewer: {self.app_flow_observation}")
+        if self.app_flow_source_note:
+            sections.append(f"App/onboarding source note: {self.app_flow_source_note}")
+        if self.screenshot_url:
+            sections.append(f"Screenshot reference supplied by reviewer: {self.screenshot_url}")
+        if self.recent_news_note:
+            sections.append(f"Recent news or product update note: {self.recent_news_note}")
+        if self.recent_news_url:
+            sections.append(f"Recent news or product update URL: {self.recent_news_url}")
+        if self.competitor_context:
+            sections.append(f"Competitor/context note supplied by reviewer: {self.competitor_context}")
+        if self.friction_checklist:
+            sections.append("Friction checklist: " + " | ".join(self.friction_checklist))
+        return "\n".join(sections)
+
+
+@dataclass
+class PageText:
+    url: str
+    title: str
+    text: str
+
+
+@dataclass
+class ResearchResult:
+    summary: str = ""
+    pages: list[PageText] = field(default_factory=list)
+    source_urls: list[str] = field(default_factory=list)
+    visual_observations: list[str] = field(default_factory=list)
+    visual_quality_flags: list[str] = field(default_factory=list)
+    visual_confidence: str = ""
+    visual_confidence_score: int = 0
+    visual_confidence_reasons: list[str] = field(default_factory=list)
+    screenshot_paths: list[str] = field(default_factory=list)
+    needs_manual_review: bool = False
+    reviewer_notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class EvidenceFact:
+    fact: str
+    why_it_matters: str
+    source_url: str
+    strength: str
+    too_generic_to_use: bool
+    friction_type: str = ""
+    surface_checked: str = ""
+    conversion_outcome: str = ""
+    angle_priority: int = 0
+    blog_used: bool = False
+    why_this_angle: str = ""
+
+
+@dataclass
+class EvidenceResult:
+    facts: list[EvidenceFact] = field(default_factory=list)
+    possible_angles: list[str] = field(default_factory=list)
+    needs_manual_review: bool = False
+    reviewer_notes: list[str] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AngleSelection:
+    selected_fact: EvidenceFact | None = None
+    allowed_facts: list[EvidenceFact] = field(default_factory=list)
+    blocked_facts: list[str] = field(default_factory=list)
+    decision: str = "manual_review"
+    quality_flags: list[str] = field(default_factory=list)
+    reviewer_notes: list[str] = field(default_factory=list)
+    needs_manual_review: bool = True
+
+
+@dataclass
+class PersonalizationDraft:
+    opening_line: str = ""
+    tailored_insight: str = ""
+    chosen_angle: str = ""
+    evidence_used_for_copy: list[str] = field(default_factory=list)
+
+
+@dataclass
+class QCResult:
+    score: int = 0
+    passed: bool = False
+    reasons: list[str] = field(default_factory=list)
+    suggested_rewrite: dict[str, str] = field(default_factory=dict)
+    quality_flags: list[str] = field(default_factory=list)
+
+
+def join_list(values: list[str]) -> str:
+    return " | ".join([str(value).strip() for value in values if str(value).strip()])

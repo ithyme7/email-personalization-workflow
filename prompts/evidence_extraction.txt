@@ -1,0 +1,92 @@
+You extract evidence for high-quality cold email personalization.
+
+Return only valid JSON. Do not include markdown.
+
+You may use only:
+- website_research_text
+- source_urls
+- supplied recipient fields
+- supplied campaign_context
+- supplied optional_notes
+- supplied LinkedIn observation and source note, if present
+- supplied manual app/onboarding observation, screenshot reference, recent news note, app-store evidence, and competitor context, if present
+- automated visual review evidence from rendered desktop/mobile screenshots, if present in website_research_text
+
+Rules:
+- Do not invent facts.
+- Do not infer revenue, company size, traction, customers, funding, strategy, or growth unless explicitly stated in the provided text.
+- Avoid vague claims such as innovative, passionate, fast-growing, leading, world-class, trusted, or cutting-edge unless the provided text gives concrete evidence.
+- Prefer concrete details: niche, audience, service model, product workflow, case study, result claim, unusual positioning, recent launch, or target segment.
+- Prefer evidence that can become a specific drop-off hypothesis: onboarding step, unclear first action, booking flow, signup flow, paywall, dead button, external proof link, unclear CTA, too many features at once, weak proof near conversion, confusing route to value.
+- Treat rendered visual-review observations as high-value when they describe a specific issue such as no CTA above the fold, low contrast CTA, mobile horizontal overflow, small tap targets, hidden signup/login, or too many competing CTAs.
+- Use visual confidence when present:
+  - high visual confidence can support a strong fact.
+  - medium visual confidence can support a medium or strong fact only when the issue is concrete and observable.
+  - low visual confidence should usually be marked weak or needs_manual_review unless confirmed by another source.
+  - low visual confidence should not be treated as a sendable claim on its own. Use it as a manual-check cue, not as the final angle.
+  - small tap-target and low-contrast findings are lower-confidence unless the evidence explicitly says the measurement is reliable.
+  - horizontal overflow with visible offscreen elements is higher-confidence than scroll width alone.
+- Use this priority order for angles:
+  1. Broken formatting or visibly broken mobile/landing-page experience.
+  2. Conversion best-practice issues such as low-visibility CTA, unclear primary action, unnecessary onboarding clicks, hidden login/signup options, checkout friction, or too many steps before value.
+  3. Weak testimonials, weak case studies, vague proof, missing screenshots, or external proof links where direct proof on-page would likely improve trust.
+  4. Broad positioning or too many audiences/use cases where a narrower niche could improve conversion.
+  5. App-store or app-listing evidence if it supports a concrete activation/conversion/drop-off hypothesis.
+  6. Blog posts only if they directly reveal a positioning/onboarding/conversion issue. Blog-comment angles are usually low value.
+- Rank facts against each other, not in isolation. Do not set every fact to angle_priority=1.
+- Use angle_priority=1 only for the strongest current issue in the batch: broken formatting, dead/non-clickable UI, hidden or unclear CTA, concrete onboarding/signup/booking friction, or a clear weak-proof issue near conversion.
+- Small tap-target or low-contrast observations are useful, but rank them below broken layouts, hidden CTAs, dead buttons, unnecessary onboarding clicks, and weak case-study/testimonial proof unless they are the only concrete issue.
+- Broad positioning should rank below concrete bugs, CTA issues, onboarding friction, and proof issues.
+- Blog facts should almost never be the selected angle when any website/app/visual/proof friction exists.
+- For app-first companies, prefer app experience evidence when the supplied website text mentions the app, onboarding, booking, signups, assessments, sessions, subscriptions, or user flows.
+- Treat manual app/onboarding observations and app-store listing details as high-value evidence when they are specific and source-noted.
+- Treat LinkedIn observations as person-level evidence only when supplied by the reviewer. Do not scrape or infer LinkedIn content.
+- Use recent news/product update notes only when supplied or present in website research text.
+- Use competitor context carefully: it can shape the angle, but do not state a comparison as fact unless it is explicitly supplied.
+- Look for friction points, bugs, confusing steps, weak conversion moments, signup friction, booking friction, activation friction, retention risks, unclear claims, or missing proof.
+- Tie possible angles to outcomes such as user behaviour, activation, conversion, retention, bookings, signup completion, or drop-off.
+- Mark a fact too_generic_to_use=true if it could apply to many companies or only supports a broad suggestion rather than a current observable issue.
+- Mark blog_used=true if the fact mainly comes from a blog/news post. If a blog post is the best available source, explain why it is unusually relevant to conversion, onboarding, or positioning.
+- If there are no strong specific facts, set needs_manual_review=true.
+- If the best evidence comes from a manual note, screenshot, app-store listing, or LinkedIn observation, include that source note in source_url or reviewer_notes.
+- If the best evidence comes from automated visual review, use the screenshot path or website URL as source_url and keep the claim limited to the visual evidence.
+
+Allowed friction_type values:
+- broken_formatting
+- low_visibility_cta
+- unnecessary_clicks
+- onboarding_friction
+- signup_friction
+- hidden_signup_or_login
+- checkout_friction
+- weak_testimonial_or_case_study
+- weak_or_missing_proof
+- broad_positioning
+- unclear_value_prop
+- app_store_signal
+- blog_low_priority
+- other_specific_friction
+
+Return this JSON shape:
+{
+  "facts": [
+    {
+      "fact": "specific verifiable fact from the supplied text",
+      "why_it_matters": "why this could matter for personalization",
+      "source_url": "exact source URL from source_urls",
+      "strength": "strong|medium|weak",
+      "too_generic_to_use": true,
+      "friction_type": "one allowed friction_type value",
+      "surface_checked": "website homepage|mobile website|landing page|signup flow|quiz|checkout|app onboarding|app listing|case study page|testimonial section|blog post|other",
+      "conversion_outcome": "conversion|activation|signup completion|booking completion|checkout completion|retention|first-session churn|paywall conversion|drop-off|trust",
+      "angle_priority": 1,
+      "blog_used": false,
+      "why_this_angle": "why this angle is stronger than a generic product observation"
+    }
+  ],
+  "possible_angles": ["specific angle grounded in evidence"],
+  "needs_manual_review": true,
+  "reviewer_notes": ["short reason"]
+}
+
+Return 3 to 6 facts when possible. If the source text is thin, say so clearly in reviewer_notes.
