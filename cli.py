@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from angle_selector import evidence_for_selected_angle, select_angle
@@ -20,6 +20,16 @@ from tone_profiles import load_tone_profile
 from web_research import research_company
 
 PITCH_SENTENCE = "We help mobile app teams with this type of work, figure out where users drop off and why."
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _emit_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(payload)
+    except Exception:
+        logging.debug("Progress callback failed", exc_info=True)
 
 
 def _base_row(lead: LeadInput) -> dict[str, Any]:
@@ -93,6 +103,10 @@ def _attach_run_metadata(row: dict[str, Any], client: LLMClient, tone_profile_na
     row["tone_profile"] = tone_profile_name
     row["model_provider"] = client.settings.llm_provider
     row["model_name"] = client.settings.model_name
+    usage = client.usage_summary()
+    row["llm_calls"] = usage["llm_calls"]
+    row["estimated_input_tokens"] = usage["estimated_input_tokens"]
+    row["estimated_output_tokens"] = usage["estimated_output_tokens"]
     return row
 
 
@@ -515,12 +529,22 @@ def _process_valid_lead(
     return row
 
 
-def run(args: argparse.Namespace) -> list[dict[str, Any]]:
+def run(args: argparse.Namespace, progress_callback: ProgressCallback | None = None) -> list[dict[str, Any]]:
     ensure_directories()
     settings = load_settings()
     client = LLMClient(settings)
     tone_profile_name = str(getattr(args, "tone_profile", "") or settings.tone_profile)
     leads = load_leads(args.input, args.campaign_context, deduplicate=not args.reuse_duplicate_personalization)
+    total = len(leads)
+    _emit_progress(
+        progress_callback,
+        event="start",
+        current=0,
+        total=total,
+        progress=0.0,
+        stage="Loading input",
+        company="",
+    )
 
     rows: list[dict[str, Any]] = []
     processed_by_key: dict[str, dict[str, Any]] = {}
@@ -547,8 +571,18 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
             )
             logging.error(ai_unavailable_note)
 
-    for lead in leads:
+    for index, lead in enumerate(leads, 1):
         logging.info("Processing %s", lead.company_name or lead.website_url or "unnamed row")
+        lead_label = lead.company_name or lead.website_url or f"Row {index}"
+        _emit_progress(
+            progress_callback,
+            event="row_start",
+            current=index - 1,
+            total=total,
+            progress=(index - 1) / total if total else 1.0,
+            stage="Processing row",
+            company=lead_label,
+        )
         if not lead.is_valid:
             rows.append(
                 _attach_run_metadata(
@@ -556,6 +590,15 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                     client,
                     tone_profile_name,
                 )
+            )
+            _emit_progress(
+                progress_callback,
+                event="row_complete",
+                current=index,
+                total=total,
+                progress=index / total if total else 1.0,
+                stage="Validation issue exported",
+                company=lead_label,
             )
             continue
         key = dedupe_key(lead)
@@ -567,6 +610,15 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                     tone_profile_name,
                 )
             )
+            _emit_progress(
+                progress_callback,
+                event="row_complete",
+                current=index,
+                total=total,
+                progress=index / total if total else 1.0,
+                stage="Duplicate reused",
+                company=lead_label,
+            )
             continue
         if not ai_available:
             row = _offline_research_row(lead, args.deep_research)
@@ -574,12 +626,30 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
             row = _attach_run_metadata(row, client, tone_profile_name)
             rows.append(row)
             processed_by_key[key] = row
+            _emit_progress(
+                progress_callback,
+                event="row_complete",
+                current=index,
+                total=total,
+                progress=index / total if total else 1.0,
+                stage="Research-only row exported",
+                company=lead_label,
+            )
             continue
         try:
             row = _process_valid_lead(client, lead, args.manual_review_mode, args.deep_research, tone_profile_name)
             row = _attach_run_metadata(row, client, tone_profile_name)
             rows.append(row)
             processed_by_key[key] = row
+            _emit_progress(
+                progress_callback,
+                event="row_complete",
+                current=index,
+                total=total,
+                progress=index / total if total else 1.0,
+                stage="Row complete",
+                company=lead_label,
+            )
         except Exception as exc:
             logging.exception("Failed to process %s", lead.company_name)
             if args.manual_review_mode:
@@ -587,14 +657,44 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
                 row = _attach_run_metadata(row, client, tone_profile_name)
                 rows.append(row)
                 processed_by_key[key] = row
+                _emit_progress(
+                    progress_callback,
+                    event="row_complete",
+                    current=index,
+                    total=total,
+                    progress=index / total if total else 1.0,
+                    stage="Failed row exported for review",
+                    company=lead_label,
+                )
             else:
                 raise
 
+    usage = client.usage_summary()
+    for row in rows:
+        row.update(usage)
+    _emit_progress(
+        progress_callback,
+        event="export",
+        current=total,
+        total=total,
+        progress=1.0,
+        stage="Exporting workbook",
+        company="",
+    )
     if args.client_batch_output:
         export_client_batch_rows(rows, args.output)
     else:
         export_rows(rows, args.output)
     logging.info("Exported %s rows to %s", len(rows), args.output)
+    _emit_progress(
+        progress_callback,
+        event="complete",
+        current=total,
+        total=total,
+        progress=1.0,
+        stage="Complete",
+        company="",
+    )
     return rows
 
 

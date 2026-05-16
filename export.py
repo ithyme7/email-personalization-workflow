@@ -28,6 +28,8 @@ CLIENT_REVIEW_COLUMNS = [
     "recommended_manual_check",
     "visual_flags",
     "visual_confidence",
+    "visual_confidence_score",
+    "visual_confidence_reasons",
     "evidence_found",
     "screenshots",
     "needs_manual_review",
@@ -36,6 +38,9 @@ CLIENT_REVIEW_COLUMNS = [
     "role",
     "website",
     "source_urls",
+    "llm_calls",
+    "estimated_input_tokens",
+    "estimated_output_tokens",
 ]
 
 CLIENT_RESEARCH_COLUMNS = [
@@ -46,6 +51,9 @@ CLIENT_RESEARCH_COLUMNS = [
     "tone profile",
     "model provider",
     "model name",
+    "llm calls",
+    "estimated input tokens",
+    "estimated output tokens",
     "linkedin observation",
     "app flow observation",
     "app check status",
@@ -202,6 +210,8 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "recommended_manual_check": _cell_lines(row.get("recommended_manual_check", ""), 520),
                 "visual_flags": _cell_lines(row.get("visual_quality_flags", ""), 240),
                 "visual_confidence": row.get("visual_confidence", ""),
+                "visual_confidence_score": row.get("visual_confidence_score", ""),
+                "visual_confidence_reasons": _cell_lines(row.get("visual_confidence_reasons", ""), 360),
                 "evidence_found": _cell_lines(evidence, 760),
                 "screenshots": _cell_lines(row.get("screenshot_paths", ""), 520),
                 "needs_manual_review": _yes_no(row.get("needs_manual_review", "")),
@@ -210,6 +220,9 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "role": row.get("recipient_role", ""),
                 "website": row.get("website_url", ""),
                 "source_urls": _cell_lines(row.get("source_urls", ""), 520),
+                "llm_calls": row.get("llm_calls", ""),
+                "estimated_input_tokens": row.get("estimated_input_tokens", ""),
+                "estimated_output_tokens": row.get("estimated_output_tokens", ""),
             }
         )
         research_rows.append(
@@ -221,6 +234,9 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "tone profile": row.get("tone_profile", ""),
                 "model provider": row.get("model_provider", ""),
                 "model name": row.get("model_name", ""),
+                "llm calls": row.get("llm_calls", ""),
+                "estimated input tokens": row.get("estimated_input_tokens", ""),
+                "estimated output tokens": row.get("estimated_output_tokens", ""),
                 "linkedin observation": row.get("linkedin_observation", ""),
                 "app flow observation": row.get("app_flow_observation", ""),
                 "app check status": row.get("app_check_status", ""),

@@ -34,6 +34,11 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Model provider support for Gemini, OpenRouter, DeepSeek, and OpenAI-style chat APIs.
 - Tone profiles for different client styles and campaign types.
 - Local Streamlit web app with CSV upload, campaign context, tone profile presets, custom prompt/profile builder, editable review rows, and CSV/XLSX export.
+- Accurate row-level progress bar in the web app.
+- Optional Google Sheets input and Google Sheets export.
+- Batch cost estimate using editable model-price assumptions.
+- Optional client-specific tone profiles saved locally.
+- One-click Windows launcher for the web app.
 
 ## Public Safety Notes
 
@@ -119,15 +124,27 @@ http://localhost:8501
 The web app supports:
 
 - CSV upload
+- Google Sheets input
 - campaign context input
 - provider/model/API-key settings
 - 50 tone presets
-- custom prompt/profile creation
+- optional client-specific custom prompt/profile creation
 - run batch button
+- row-level progress bar
+- dashboard with review workload, visual confidence, friction types, quality flags, and estimated model cost
 - review/edit rows
 - export edited CSV
 - export edited XLSX
 - export full workbook
+- optional export to Google Sheets
+
+On Windows you can also double-click:
+
+```text
+Start_Email_Personalizer_Web_App.bat
+```
+
+The launcher waits until Streamlit is ready, opens the browser, and uses the next free localhost port if `8501` is already in use.
 
 ## Run A Real Batch
 
@@ -147,6 +164,8 @@ Built-in profiles:
 - `founder_casual`: warmer founder-to-founder style while staying evidence-led.
 
 You can add a new client profile by copying one JSON file and changing the opening style, banned phrases, QC focus, and examples.
+
+The web app can also save optional client-specific profiles under `data/custom_tone_profiles/`. You do not have to use this for every run; it is mainly useful when a client gives repeatable tone feedback.
 
 ## Build A Windows EXE
 

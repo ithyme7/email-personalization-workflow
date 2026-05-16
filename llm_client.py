@@ -44,6 +44,9 @@ def parse_json_object(text: str) -> dict[str, Any]:
 class LLMClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.call_count = 0
+        self.estimated_input_tokens = 0
+        self.estimated_output_tokens = 0
 
     @property
     def available(self) -> bool:
@@ -90,6 +93,23 @@ class LLMClient:
         if self.settings.llm_provider == "deepseek":
             return self.settings.deepseek_api_key
         return self.settings.openai_api_key
+
+    @staticmethod
+    def _estimate_tokens(value: Any) -> int:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return max(1, round(len(text) / 4))
+
+    def _record_usage(self, system_prompt: str, user_payload: dict[str, Any], response_text: str) -> None:
+        self.call_count += 1
+        self.estimated_input_tokens += self._estimate_tokens(system_prompt) + self._estimate_tokens(user_payload)
+        self.estimated_output_tokens += self._estimate_tokens(response_text)
+
+    def usage_summary(self) -> dict[str, int]:
+        return {
+            "llm_calls": self.call_count,
+            "estimated_input_tokens": self.estimated_input_tokens,
+            "estimated_output_tokens": self.estimated_output_tokens,
+        }
 
     def _retry_delay_seconds(self, response: requests.Response) -> float:
         text = response.text
@@ -171,6 +191,7 @@ class LLMClient:
         except (KeyError, IndexError, TypeError) as exc:
             logging.error("Unexpected Gemini response: %s", json.dumps(data)[:500])
             raise LLMError("Gemini response did not contain text content") from exc
+        self._record_usage(system_prompt, user_payload, content)
         return parse_json_object(content)
 
     def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
@@ -218,6 +239,7 @@ class LLMClient:
 
         data = response.json()
         content = data["choices"][0]["message"]["content"]
+        self._record_usage(system_prompt, user_payload, content)
         return parse_json_object(content)
 
 

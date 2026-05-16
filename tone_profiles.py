@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from config import TONE_PROFILES_DIR
+from config import CUSTOM_TONE_PROFILES_DIR, TONE_PROFILES_DIR
 from models import ToneProfile
 from tone_preset_library import get_preset_profile, preset_names
 
@@ -19,9 +19,10 @@ def _as_list(value: Any) -> list[str]:
 
 def available_tone_profiles() -> list[str]:
     names = set(preset_names())
-    if not TONE_PROFILES_DIR.exists():
-        return sorted(names)
-    names.update(path.stem for path in TONE_PROFILES_DIR.glob("*.json"))
+    if TONE_PROFILES_DIR.exists():
+        names.update(path.stem for path in TONE_PROFILES_DIR.glob("*.json"))
+    if CUSTOM_TONE_PROFILES_DIR.exists():
+        names.update(path.stem for path in CUSTOM_TONE_PROFILES_DIR.glob("*.json"))
     return sorted(names)
 
 
@@ -30,6 +31,10 @@ def load_tone_profile(name_or_path: str = "friction_first") -> ToneProfile:
     path = Path(value)
     if not path.suffix:
         path = TONE_PROFILES_DIR / f"{value}.json"
+        if not path.exists():
+            custom_path = CUSTOM_TONE_PROFILES_DIR / f"{value}.json"
+            if custom_path.exists():
+                path = custom_path
     if not path.exists():
         preset = get_preset_profile(value)
         if preset:
