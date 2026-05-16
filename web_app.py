@@ -275,7 +275,12 @@ def _set_api_env(provider: str, api_key: str, model_name: str) -> None:
         os.environ[key_by_provider[provider]] = api_key.strip()
 
 
-def _sidebar_settings() -> tuple[str, str, str, float, float]:
+def _set_detector_env(advanced_detectors: bool, lighthouse_review: bool) -> None:
+    os.environ["ADVANCED_DETECTORS"] = "auto" if advanced_detectors else "off"
+    os.environ["LIGHTHOUSE_REVIEW"] = "auto" if lighthouse_review else "off"
+
+
+def _sidebar_settings() -> tuple[str, str, str, float, float, bool, bool]:
     settings = load_settings()
     st.sidebar.header("Model")
     providers = ["gemini", "openrouter", "deepseek", "openai"]
@@ -301,7 +306,19 @@ def _sidebar_settings() -> tuple[str, str, str, float, float]:
         format="%.4f",
     )
     st.sidebar.caption("Editable estimate. Check actual provider pricing before quoting margin.")
-    return provider, model_name, api_key, input_price, output_price
+
+    st.sidebar.header("Research detectors")
+    advanced_detectors = st.sidebar.checkbox(
+        "Playwright + axe checks",
+        value=settings.advanced_detectors not in {"0", "false", "no", "off", "disabled"},
+        help="Full-page screenshots, traces, visible CTA checks, dead-link candidates and axe-core accessibility signals.",
+    )
+    lighthouse_review = st.sidebar.checkbox(
+        "Lighthouse checks",
+        value=settings.lighthouse_review not in {"0", "false", "no", "off", "disabled"},
+        help="Slower mobile quality audit. Use for deeper review, not every quick batch.",
+    )
+    return provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review
 
 
 def _load_google_sheet_to_csv(sheet_url: str, worksheet_name: str, service_account_file) -> Path:
@@ -343,8 +360,11 @@ def _run_batch(
     api_key: str,
     input_price: float,
     output_price: float,
+    advanced_detectors: bool,
+    lighthouse_review: bool,
 ) -> tuple[list[dict[str, Any]], Path]:
     _set_api_env(provider, api_key, model_name)
+    _set_detector_env(advanced_detectors, lighthouse_review)
     output_path = _output_path(input_path)
     progress_bar = st.progress(0, text="Preparing batch...")
     status_box = st.empty()
@@ -578,7 +598,7 @@ def main() -> None:
     st.title("Email Personalization Workflow")
     st.caption("Upload leads, choose context and tone, run the batch, review rows, then export.")
 
-    provider, model_name, api_key, input_price, output_price = _sidebar_settings()
+    provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review = _sidebar_settings()
 
     dashboard_tab, setup_tab, review_tab, export_tab, calibration_tab, history_tab, presets_tab = st.tabs(
         ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Tone Calibration", "History", "Tone Presets"]
@@ -673,6 +693,8 @@ def main() -> None:
                         api_key,
                         input_price,
                         output_price,
+                        advanced_detectors,
+                        lighthouse_review,
                     )
                     st.success(f"Batch ready: {len(rows)} rows. Output saved to {output_path}")
                 except Exception as exc:
