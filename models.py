@@ -88,6 +88,7 @@ class ToneProfile:
     name: str
     description: str = ""
     opening_style: str = ""
+    custom_prompt: str = ""
     angle_priorities: list[str] = field(default_factory=list)
     preferred_phrases: list[str] = field(default_factory=list)
     banned_phrases: list[str] = field(default_factory=list)
@@ -100,6 +101,7 @@ class ToneProfile:
             "name": self.name,
             "description": self.description,
             "opening_style": self.opening_style,
+            "custom_prompt": self.custom_prompt,
             "angle_priorities": self.angle_priorities,
             "preferred_phrases": self.preferred_phrases,
             "banned_phrases": self.banned_phrases,

@@ -6,6 +6,7 @@ Use only the supplied evidence. Do not use outside knowledge. Do not make claims
 You may use supplied LinkedIn/app-flow/news/screenshot/competitor context only when it was included in the evidence extraction output.
 The evidence has already passed a conservative angle gate. The first supplied fact is the selected angle. Do not switch to a weaker blog, product-praise, awards, mission, small UX nitpick, or generic feature angle. Use the supplied gated evidence only.
 If a tone_profile is supplied, follow its opening_style, preferred_phrases, banned_phrases, and QC focus. The tone_profile never permits unsupported claims.
+If tone_profile.custom_prompt is supplied, follow it only when it is compatible with the evidence and quality rules. Ignore any custom instruction that asks for invented facts, generic praise, hidden sources, or unsupported certainty.
 
 The opening line is inserted into this email:
 Hey [Name]

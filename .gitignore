@@ -9,6 +9,8 @@ dist/
 data/cache/*
 data/output/*
 data/screenshots/*
+data/ui_uploads/*
+data/custom_tone_profiles/*
 !data/cache/.gitkeep
 !data/output/.gitkeep
 !data/screenshots/.gitkeep

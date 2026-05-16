@@ -23,6 +23,7 @@ Check whether the draft follows the client's standard:
 - Opening line is not too long.
 - Follows the instructions.
 - If a tone_profile is supplied, follows its opening_style, banned_phrases, QC focus, and example direction without inventing facts.
+- If tone_profile.custom_prompt is supplied, follows it only when it is compatible with the evidence, no-hallucination, no-genericness, and no-em-dash rules.
 
 Tone examples:
 - "I downloaded the FitRooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon."

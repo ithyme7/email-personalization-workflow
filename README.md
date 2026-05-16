@@ -33,6 +33,7 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Dark-mode Excel dashboard with review, research, and summary tabs.
 - Model provider support for Gemini, OpenRouter, DeepSeek, and OpenAI-style chat APIs.
 - Tone profiles for different client styles and campaign types.
+- Local Streamlit web app with CSV upload, campaign context, tone profile presets, custom prompt/profile builder, editable review rows, and CSV/XLSX export.
 
 ## Public Safety Notes
 
@@ -103,6 +104,31 @@ Optional columns:
 python cli.py --input data/input/sample_companies.csv --output data/output/sample_output.xlsx --campaign-context "We help mobile app teams with this type of work, figure out where users drop off and why." --reuse-duplicate-personalization --client-batch-output --tone-profile friction_first
 ```
 
+## Run The Web App
+
+```bash
+streamlit run web_app.py
+```
+
+Then open:
+
+```text
+http://localhost:8501
+```
+
+The web app supports:
+
+- CSV upload
+- campaign context input
+- provider/model/API-key settings
+- 50 tone presets
+- custom prompt/profile creation
+- run batch button
+- review/edit rows
+- export edited CSV
+- export edited XLSX
+- export full workbook
+
 ## Run A Real Batch
 
 ```bash
@@ -115,6 +141,7 @@ Tone profiles live in `tone_profiles/` and can be selected with `--tone-profile`
 
 Built-in profiles:
 
+- 50 presets are available in the web app and through the tone preset library.
 - `friction_first`: short conversational lines focused on a current UX/conversion friction point.
 - `proof_led_b2b`: stronger emphasis on weak proof, trust leaks, case studies, and demo conversion.
 - `founder_casual`: warmer founder-to-founder style while staying evidence-led.
@@ -156,6 +183,7 @@ Useful internal docs:
 - `docs/SECURITY_PRIVACY.md`
 - `docs/QUALITY_BENCHMARK.md`
 - `docs/DEMO_SCRIPT.md`
+- `docs/WEB_APP_USAGE_NL.md`
 
 ## Limitations
 
