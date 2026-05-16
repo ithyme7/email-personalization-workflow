@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from client_safe_export import create_client_safe_package
+from client_training import append_training_feedback_to_goldset, normalize_training_feedback, read_training_feedback, training_template_bytes
 from cli import run
 from config import DATA_DIR, OUTPUT_DIR, load_settings
 from cost_estimator import CostEstimate, estimate_batch_cost, price_for_model
@@ -721,8 +722,8 @@ def main() -> None:
 
     provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review = _sidebar_settings()
 
-    dashboard_tab, setup_tab, review_tab, export_tab, eval_tab, calibration_tab, history_tab, presets_tab = st.tabs(
-        ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Evals", "Tone Calibration", "History", "Tone Presets"]
+    dashboard_tab, setup_tab, review_tab, export_tab, training_tab, eval_tab, calibration_tab, history_tab, presets_tab = st.tabs(
+        ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Client Training", "Evals", "Tone Calibration", "History", "Tone Presets"]
     )
 
     with dashboard_tab:
@@ -1119,6 +1120,81 @@ def main() -> None:
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
+
+    with training_tab:
+        st.subheader("Client training pack")
+        st.caption("Give this to a client so they can label examples in plain English. Import it back to build a training/eval goldset.")
+        st.markdown(
+            """
+            <div class="ux-card">
+            <strong>How this works</strong>
+            <p class="ux-muted">
+            The client only chooses Send as is, Rewrite, or Reject. If they rewrite a line, that becomes the preferred example.
+            The original line becomes the non-preferred example. This is the cleanest way to collect future fine-tuning or preference data.
+            </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        source = st.radio("Template source", ["Current review rows", "Blank template"], horizontal=True)
+        template_df = st.session_state.get("review_df") if source == "Current review rows" else None
+        if source == "Current review rows" and template_df is None:
+            st.info("Run or load a batch first, or choose Blank template.")
+        else:
+            st.download_button(
+                "Download client training template",
+                training_template_bytes(template_df),
+                "client_training_feedback_template.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+        with st.expander("Message you can send to the client"):
+            st.code(
+                """I've attached a short feedback template.
+
+For each line, just choose:
+- Send as is
+- Rewrite
+- Reject
+
+If you choose Rewrite, please write the version you'd actually want to send.
+The most useful feedback is not a long explanation, but a few strong examples of what sounds right and what sounds wrong.
+
+I'll use the completed sheet to tune the workflow/model around your preferred tone and decision criteria.""",
+                language="text",
+            )
+
+        st.markdown("**Import completed client feedback**")
+        completed_feedback = st.file_uploader("Completed training template", type=["xlsx", "csv"], key="client_training_upload")
+        training_split = st.selectbox(
+            "Save imported feedback to",
+            GOLDSET_SPLITS,
+            index=GOLDSET_SPLITS.index("candidate_training_set") if "candidate_training_set" in GOLDSET_SPLITS else 0,
+            key="training_goldset_split",
+        )
+        if completed_feedback is not None:
+            try:
+                raw_feedback = read_training_feedback(completed_feedback)
+                normalized_feedback = normalize_training_feedback(raw_feedback)
+                st.markdown("**Preview normalized training rows**")
+                if normalized_feedback.empty:
+                    st.warning("No rows with a client_decision were found yet.")
+                else:
+                    st.dataframe(normalized_feedback, use_container_width=True, height=320)
+                if st.button("Import feedback into goldset", use_container_width=True):
+                    path, count, _ = append_training_feedback_to_goldset(completed_feedback, split=training_split)
+                    st.success(f"Imported {count} rows into {path}")
+            except Exception as exc:
+                st.error(f"Could not import client feedback: {exc}")
+
+        st.markdown("**Quick field guide**")
+        st.write(
+            "- `Send as is`: the client would send the line without changes.\n"
+            "- `Rewrite`: the idea might be usable, but the client wants different wording. The rewrite is the most valuable training signal.\n"
+            "- `Reject`: the line should not be used. Pick the closest reason so the system can learn what failed.\n"
+            "- `Surface to focus on`: where the observation should come from, such as app onboarding, App Store reviews, booking flow, or landing page."
+        )
 
     with calibration_tab:
         _tone_calibration_panel()

@@ -33,8 +33,9 @@ De launcher kiest automatisch `localhost:8501`, of de volgende vrije poort als 8
 9. Review en edit de rows in de `Review & Edit` tab.
 10. Zet per rij eventueel `human_decision`, `edited_line`, `edit_reason_category` en `edit_notes`.
 11. Sla goede/mislukte menselijke edits optioneel op als goldset.
-12. Check optioneel de `Evals` tab als je een frozen eval set hebt.
-13. Exporteer als CSV, XLSX, full workbook, client delivery export, client-safe package of naar Google Sheets.
+12. Gebruik eventueel `Client Training` om een simpele feedback-template voor de klant te maken.
+13. Check optioneel de `Evals` tab als je een frozen eval set hebt.
+14. Exporteer als CSV, XLSX, full workbook, client delivery export, client-safe package of naar Google Sheets.
 
 ## Demo mode
 
@@ -98,6 +99,22 @@ data/goldset/candidate_training_set.csv
 ```
 
 Die goldset kun je later gebruiken om tone profiles, prompts, modelkeuze en pairwise evaluaties te verbeteren.
+
+## Client Training
+
+De `Client Training` tab maakt het trainen simpel voor een klant.
+
+De klant hoeft alleen dit in te vullen:
+
+- `Send as is`: deze line zou ik zo versturen.
+- `Rewrite`: deze line is bijna goed, maar schrijf hem zo.
+- `Reject`: deze line moet niet gebruikt worden.
+
+Als de klant `Rewrite` kiest, is `client_rewrite` het belangrijkste veld. Dat wordt later de preferred output. De originele line wordt dan de non-preferred output.
+
+De template bevat ook uitleg en voorbeeldrijen, zodat de klant geen technische termen zoals evals, DPO of fine-tuning hoeft te begrijpen.
+
+Na uploaden zet de app de ingevulde feedback automatisch om naar een goldset.
 
 ## Evals
 

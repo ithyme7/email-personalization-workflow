@@ -53,6 +53,7 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Viewport scope and evidence scope for visual/UX claims.
 - Human edit/goldset workflow with reviewed examples, frozen eval examples, and candidate training examples.
 - Frozen eval runner for measuring gate/human agreement on locked examples.
+- Client training template so non-technical clients can mark Send as is, Rewrite, or Reject.
 - Client delivery export with a smaller column set for handoff.
 - Client-safe delivery package that excludes raw traces, internal detector output, and local paths.
 
@@ -151,6 +152,7 @@ The web app supports:
 - dashboard with review workload, visual confidence, friction types, quality flags, and estimated model cost
 - sendability dashboard showing Send/Edit/Reject split, hard-fail reasons, soft-edit reasons, and surface correctness
 - Evals tab for frozen goldset agreement, send precision, false sends, and eval report export
+- Client Training tab for exporting a human-friendly feedback template and importing completed feedback into the goldset
 - batch history
 - tone calibration from client feedback
 - review/edit rows
@@ -236,6 +238,20 @@ The eval report measures:
 
 Use this before changing prompts, thresholds, model choice, or tone profiles.
 
+## Client Training Template
+
+Use the `Client Training` tab when you want a client to teach the system their preferred tone without touching prompts or technical settings.
+
+The exported workbook asks the client to fill in simple fields:
+
+- `client_decision`: Send as is, Rewrite, or Reject.
+- `client_rewrite`: the line they would actually send.
+- `main_reason`: why the line worked or failed.
+- `surface_to_focus_on`: app onboarding, App Store, booking flow, landing page, proof, or other.
+- `what_good_should_sound_like`: plain-language tone guidance.
+
+When imported back into the web app, the feedback is normalized into the selected goldset split. Rewrites become preferred examples and the original lines become non-preferred examples.
+
 ## Productized Service Workflow
 
 For client work, the recommended workflow is:
@@ -297,6 +313,7 @@ Useful internal docs:
 - `docs/SECURITY_PRIVACY.md`
 - `docs/QUALITY_BENCHMARK.md`
 - `docs/GOLDSET_EVALS.md`
+- `docs/CLIENT_TRAINING_GUIDE.md`
 - `docs/DEMO_SCRIPT.md`
 - `docs/WEB_APP_USAGE_NL.md`
 
