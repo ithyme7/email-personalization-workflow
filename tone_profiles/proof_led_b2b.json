@@ -1,0 +1,40 @@
+{
+  "name": "proof_led_b2b",
+  "description": "A more B2B-oriented profile that looks for proof gaps, unclear ROI claims, weak case studies, and trust leaks near conversion.",
+  "opening_style": "Open with a calm first-person observation from the landing page, case study page, pricing page, or demo flow.",
+  "angle_priorities": [
+    "Weak case studies or proof claims without direct quotes, screenshots, named outcomes, or visible customer evidence.",
+    "Unclear demo/signup CTA or hidden next step.",
+    "Broad positioning across multiple buyer types or use cases.",
+    "Broken formatting or mobile layout issues.",
+    "Blog angles only when they reveal a proof, positioning, or conversion issue."
+  ],
+  "preferred_phrases": [
+    "I was on the [product] website...",
+    "I was checking out the [product] landing page...",
+    "that probably hurts demo conversion",
+    "that could be weakening trust before signup"
+  ],
+  "banned_phrases": [
+    "powerful",
+    "impressive",
+    "interesting",
+    "innovative",
+    "world-class",
+    "market-leading"
+  ],
+  "qc_focus": [
+    "Prioritize proof and trust issues.",
+    "Avoid product praise.",
+    "Tie every line to demo conversion, signup conversion, trust, or activation.",
+    "No em dashes."
+  ],
+  "example_good_lines": [
+    "I was on the GrowthDesk website and noticed the customer stories mention outcomes but keep the proof off-page, bringing one direct quote beside the demo CTA would probably help conversion.",
+    "I was checking out the CloudOps landing page and the primary CTA sits below a broad feature list, I'd guess some visitors drop before reaching the demo step."
+  ],
+  "example_bad_lines": [
+    "Your product looks like a strong platform for modern teams.",
+    "I liked the way your blog explains the market."
+  ]
+}

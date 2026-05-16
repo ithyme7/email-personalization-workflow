@@ -5,11 +5,12 @@ Return only valid JSON. Do not include markdown.
 Use only the supplied evidence. Do not use outside knowledge. Do not make claims that are not present in the evidence.
 You may use supplied LinkedIn/app-flow/news/screenshot/competitor context only when it was included in the evidence extraction output.
 The evidence has already passed a conservative angle gate. The first supplied fact is the selected angle. Do not switch to a weaker blog, product-praise, awards, mission, small UX nitpick, or generic feature angle. Use the supplied gated evidence only.
+If a tone_profile is supplied, follow its opening_style, preferred_phrases, banned_phrases, and QC focus. The tone_profile never permits unsupported claims.
 
 The opening line is inserted into this email:
 Hey [Name]
 {opening_line}
-We help mobile app teams with this type of work, figure out where users drop off and why.
+{required_next_sentence}
 In a recent app project, session replays showed users bouncing off a paywall because the copy was unclear. After the paywall was rewritten, conversion improved materially.
 
 The opening line must prime the reader for drop-off, activation, bookings, signup completion, churn, paywall friction, retention, or conversion. It should feel like the sender actually checked the app or page.
@@ -29,7 +30,7 @@ Opening line rules:
 - Say "the [product] app" or "the [product] website" instead of "[domain] website."
 - Lead with a specific bug, friction point, unclear step, dead button, onboarding issue, booking issue, paywall issue, weak proof point, or unclear first action when evidence supports it.
 - Tie the observation to a concrete outcome such as user drop-off, activation, conversion, retention, bookings, signup completion, first-session churn, or paywall conversion.
-- Make the line flow naturally into this exact next sentence: "We help mobile app teams with this type of work, figure out where users drop off and why."
+- Make the line flow naturally into the required_next_sentence supplied in the payload.
 - Prefer a mild hypothesis when evidence supports it: "I'd guess...", "I bet...", "that probably...", "that could be costing...", "that feels like a place where..."
 - No generic praise.
 - No filler words such as powerful, impressive, interesting, or innovative.

@@ -16,6 +16,7 @@ from llm_client import LLMClient
 from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
 from personalization_writer import write_personalization
 from quality_checker import check_quality
+from tone_profiles import load_tone_profile
 from web_research import research_company
 
 PITCH_SENTENCE = "We help mobile app teams with this type of work, figure out where users drop off and why."
@@ -84,7 +85,15 @@ def _template_preview(lead: LeadInput, opening_line: str) -> str:
     line = str(opening_line or "").strip()
     if not line or line.startswith("["):
         return ""
-    return f"Hey {_first_name(lead.recipient_name)}\n\n{line}\n\n{PITCH_SENTENCE}"
+    next_sentence = lead.campaign_context.strip() or PITCH_SENTENCE
+    return f"Hey {_first_name(lead.recipient_name)}\n\n{line}\n\n{next_sentence}"
+
+
+def _attach_run_metadata(row: dict[str, Any], client: LLMClient, tone_profile_name: str) -> dict[str, Any]:
+    row["tone_profile"] = tone_profile_name
+    row["model_provider"] = client.settings.llm_provider
+    row["model_name"] = client.settings.model_name
+    return row
 
 
 def _looks_app_first(lead: LeadInput, row: dict[str, Any] | None = None, research: ResearchResult | None = None) -> bool:
@@ -317,6 +326,7 @@ def _process_valid_lead(
     lead: LeadInput,
     manual_review_mode: bool,
     deep_research_enabled: bool,
+    tone_profile_name: str,
 ) -> dict[str, Any]:
     row = _base_row(lead)
 
@@ -369,7 +379,8 @@ def _process_valid_lead(
             return row
         raise RuntimeError(f"Research failed for {lead.company_name}: {row['reviewer_notes']}")
 
-    evidence = extract_evidence(client, lead, research)
+    tone_profile = load_tone_profile(tone_profile_name)
+    evidence = extract_evidence(client, lead, research, tone_profile)
     row["evidence_points"] = _format_evidence(evidence)
     selection = select_angle(evidence)
     gated_evidence = evidence_for_selected_angle(evidence, selection)
@@ -419,13 +430,19 @@ def _process_valid_lead(
         row["recommended_manual_check"] = manual_check
         return row
 
-    draft = write_personalization(client, lead, gated_evidence)
-    qc = check_quality(client, lead, gated_evidence, draft)
+    draft = write_personalization(client, lead, gated_evidence, tone_profile)
+    qc = check_quality(client, lead, gated_evidence, draft, tone_profile)
 
     if not qc.passed:
         rewrite_reasons = qc.reasons + qc.quality_flags
-        rewritten = write_personalization(client, lead, gated_evidence, previous_failure_reasons=rewrite_reasons)
-        rewritten_qc = check_quality(client, lead, gated_evidence, rewritten)
+        rewritten = write_personalization(
+            client,
+            lead,
+            gated_evidence,
+            tone_profile,
+            previous_failure_reasons=rewrite_reasons,
+        )
+        rewritten_qc = check_quality(client, lead, gated_evidence, rewritten, tone_profile)
         if rewritten_qc.score >= qc.score:
             draft = rewritten
             qc = rewritten_qc
@@ -502,6 +519,7 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
     ensure_directories()
     settings = load_settings()
     client = LLMClient(settings)
+    tone_profile_name = str(getattr(args, "tone_profile", "") or settings.tone_profile)
     leads = load_leads(args.input, args.campaign_context, deduplicate=not args.reuse_duplicate_personalization)
 
     rows: list[dict[str, Any]] = []
@@ -532,26 +550,41 @@ def run(args: argparse.Namespace) -> list[dict[str, Any]]:
     for lead in leads:
         logging.info("Processing %s", lead.company_name or lead.website_url or "unnamed row")
         if not lead.is_valid:
-            rows.append(_placeholder_row(lead, "Row was not processed because input validation failed"))
+            rows.append(
+                _attach_run_metadata(
+                    _placeholder_row(lead, "Row was not processed because input validation failed"),
+                    client,
+                    tone_profile_name,
+                )
+            )
             continue
         key = dedupe_key(lead)
         if args.reuse_duplicate_personalization and key in processed_by_key:
-            rows.append(_copy_personalization_for_contact(processed_by_key[key], lead))
+            rows.append(
+                _attach_run_metadata(
+                    _copy_personalization_for_contact(processed_by_key[key], lead),
+                    client,
+                    tone_profile_name,
+                )
+            )
             continue
         if not ai_available:
             row = _offline_research_row(lead, args.deep_research)
             row["reviewer_notes"] = join_list([row.get("reviewer_notes", ""), ai_unavailable_note])
+            row = _attach_run_metadata(row, client, tone_profile_name)
             rows.append(row)
             processed_by_key[key] = row
             continue
         try:
-            row = _process_valid_lead(client, lead, args.manual_review_mode, args.deep_research)
+            row = _process_valid_lead(client, lead, args.manual_review_mode, args.deep_research, tone_profile_name)
+            row = _attach_run_metadata(row, client, tone_profile_name)
             rows.append(row)
             processed_by_key[key] = row
         except Exception as exc:
             logging.exception("Failed to process %s", lead.company_name)
             if args.manual_review_mode:
                 row = _placeholder_row(lead, f"Processing failed: {exc}")
+                row = _attach_run_metadata(row, client, tone_profile_name)
                 rows.append(row)
                 processed_by_key[key] = row
             else:
@@ -591,6 +624,11 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Add public app-store discovery plus supplied LinkedIn/app-flow/news/screenshot context to the research prompt",
+    )
+    parser.add_argument(
+        "--tone-profile",
+        default="",
+        help="Tone profile name or JSON path. Built-ins: friction_first, proof_led_b2b, founder_casual",
     )
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser.parse_args()

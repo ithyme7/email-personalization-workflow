@@ -43,6 +43,9 @@ CLIENT_RESEARCH_COLUMNS = [
     "person",
     "role",
     "website",
+    "tone profile",
+    "model provider",
+    "model name",
     "linkedin observation",
     "app flow observation",
     "app check status",
@@ -215,6 +218,9 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "person": row.get("recipient_name", ""),
                 "role": row.get("recipient_role", ""),
                 "website": row.get("website_url", ""),
+                "tone profile": row.get("tone_profile", ""),
+                "model provider": row.get("model_provider", ""),
+                "model name": row.get("model_name", ""),
                 "linkedin observation": row.get("linkedin_observation", ""),
                 "app flow observation": row.get("app_flow_observation", ""),
                 "app check status": row.get("app_check_status", ""),
@@ -302,6 +308,8 @@ def _summary_rows(review_rows: list[dict[str, Any]], research_rows: list[dict[st
     app_checks = sum(
         1 for row in review_rows if "recommended" in str(row.get("app_check_status", "")).lower()
     )
+    tone_profiles = sorted({str(row.get("tone profile", "")).strip() for row in research_rows if row.get("tone profile")})
+    model_names = sorted({str(row.get("model name", "")).strip() for row in research_rows if row.get("model name")})
     return [
         {"metric": "Total contact rows", "value": str(len(review_rows))},
         {"metric": "Unique companies", "value": str(unique_companies)},
@@ -314,6 +322,8 @@ def _summary_rows(review_rows: list[dict[str, Any]], research_rows: list[dict[st
         {"metric": "Medium visual-confidence rows", "value": str(medium_visual)},
         {"metric": "Low visual-confidence rows", "value": str(low_visual)},
         {"metric": "Rows where app walkthrough is recommended", "value": str(app_checks)},
+        {"metric": "Tone profile", "value": ", ".join(tone_profiles) or "not set"},
+        {"metric": "Model", "value": ", ".join(model_names) or "not set"},
         {
             "metric": "How to use",
             "value": "Start in the Review tab. Edit personalized_line if needed, then check Research Details for longer evidence.",
@@ -624,7 +634,7 @@ def _write_readable_xlsx(rows: list[dict[str, Any]], output_path: Path) -> None:
     _write_sheet(details, CLIENT_RESEARCH_COLUMNS, research_rows)
     _style_sheet(
         details,
-        [22, 20, 24, 30, 42, 48, 26, 70, 78, 78, 78, 36, 20, 78, 78, 24, 24, 24, 28, 52, 78, 16, 14, 52, 78, 18, 22, 52, 60],
+        [22, 20, 24, 30, 20, 20, 28, 42, 48, 26, 70, 78, 78, 78, 36, 20, 78, 78, 24, 24, 24, 28, 52, 78, 16, 14, 52, 78, 18, 22, 52, 60],
         row_height=92,
     )
 

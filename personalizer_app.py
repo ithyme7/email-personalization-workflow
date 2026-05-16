@@ -9,6 +9,7 @@ from pathlib import Path
 
 from cli import run
 from config import load_settings
+from tone_profiles import available_tone_profiles
 
 
 DEFAULT_CONTEXT = "We help mobile app teams with this type of work, figure out where users drop off and why."
@@ -94,7 +95,7 @@ def _maybe_prompt_for_api_key(settings):
     return load_settings()
 
 
-def _make_args(input_path: str, output_path: str, campaign_context: str) -> argparse.Namespace:
+def _make_args(input_path: str, output_path: str, campaign_context: str, tone_profile: str) -> argparse.Namespace:
     return argparse.Namespace(
         input=input_path,
         output=output_path,
@@ -103,6 +104,7 @@ def _make_args(input_path: str, output_path: str, campaign_context: str) -> argp
         reuse_duplicate_personalization=True,
         client_batch_output=True,
         deep_research=True,
+        tone_profile=tone_profile,
         log_level="INFO",
     )
 
@@ -147,6 +149,11 @@ def main() -> None:
     print("")
     print("Stap 3 - campaign context")
     campaign_context = _ask_path("Campaign context", DEFAULT_CONTEXT)
+    print("")
+    print("Stap 4 - tone profile")
+    profiles = ", ".join(available_tone_profiles()) or "friction_first"
+    print(f"Beschikbaar: {profiles}")
+    tone_profile = _ask_path("Tone profile", settings.tone_profile)
     open_after = _ask_yes_no("Open de Excel automatisch als hij klaar is?", True)
 
     print("")
@@ -156,7 +163,7 @@ def main() -> None:
     print("")
 
     try:
-        rows = run(_make_args(input_path, output_path, campaign_context))
+        rows = run(_make_args(input_path, output_path, campaign_context, tone_profile))
     except Exception as exc:
         print("")
         print(f"Workflow failed: {exc}")
@@ -169,6 +176,7 @@ def main() -> None:
     print("Done.")
     print(f"Output saved to: {Path(output_path).resolve()}")
     print(f"Rows exported: {len(rows)}")
+    print(f"Tone profile: {tone_profile}")
     print(f"Rows with generated personalization line: {generated}")
     print(f"Rows marked for manual review: {needs_review}")
     if not settings.has_active_llm_key:

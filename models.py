@@ -11,6 +11,9 @@ OUTPUT_COLUMNS = [
     "recipient_name",
     "recipient_role",
     "campaign_context",
+    "tone_profile",
+    "model_provider",
+    "model_name",
     "linkedin_observation",
     "linkedin_source_note",
     "app_store_url",
@@ -78,6 +81,32 @@ class LeadInput:
     is_valid: bool = True
     validation_errors: list[str] = field(default_factory=list)
     is_duplicate: bool = False
+
+
+@dataclass
+class ToneProfile:
+    name: str
+    description: str = ""
+    opening_style: str = ""
+    angle_priorities: list[str] = field(default_factory=list)
+    preferred_phrases: list[str] = field(default_factory=list)
+    banned_phrases: list[str] = field(default_factory=list)
+    qc_focus: list[str] = field(default_factory=list)
+    example_good_lines: list[str] = field(default_factory=list)
+    example_bad_lines: list[str] = field(default_factory=list)
+
+    def to_prompt_payload(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "opening_style": self.opening_style,
+            "angle_priorities": self.angle_priorities,
+            "preferred_phrases": self.preferred_phrases,
+            "banned_phrases": self.banned_phrases,
+            "qc_focus": self.qc_focus,
+            "example_good_lines": self.example_good_lines,
+            "example_bad_lines": self.example_bad_lines,
+        }
 
 
 @dataclass

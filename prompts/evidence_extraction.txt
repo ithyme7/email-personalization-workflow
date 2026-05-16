@@ -11,6 +11,7 @@ You may use only:
 - supplied LinkedIn observation and source note, if present
 - supplied manual app/onboarding observation, screenshot reference, recent news note, app-store evidence, and competitor context, if present
 - automated visual review evidence from rendered desktop/mobile screenshots, if present in website_research_text
+- tone_profile angle priorities and QC focus, if supplied
 
 Rules:
 - Do not invent facts.
@@ -34,6 +35,7 @@ Rules:
   5. App-store or app-listing evidence if it supports a concrete activation/conversion/drop-off hypothesis.
   6. Blog posts only if they directly reveal a positioning/onboarding/conversion issue. Blog-comment angles are usually low value.
 - Rank facts against each other, not in isolation. Do not set every fact to angle_priority=1.
+- If a tone_profile is supplied, use it to adjust priority within these rules. Do not let a tone_profile override evidence requirements or invent facts.
 - Use angle_priority=1 only for the strongest current issue in the batch: broken formatting, dead/non-clickable UI, hidden or unclear CTA, concrete onboarding/signup/booking friction, or a clear weak-proof issue near conversion.
 - Small tap-target or low-contrast observations are useful, but rank them below broken layouts, hidden CTAs, dead buttons, unnecessary onboarding clicks, and weak case-study/testimonial proof unless they are the only concrete issue.
 - Broad positioning should rank below concrete bugs, CTA issues, onboarding friction, and proof issues.

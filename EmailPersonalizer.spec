@@ -5,7 +5,7 @@ a = Analysis(
     ['personalizer_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('prompts', 'prompts')],
+    datas=[('prompts', 'prompts'), ('tone_profiles', 'tone_profiles')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

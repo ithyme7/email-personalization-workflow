@@ -1,0 +1,49 @@
+{
+  "name": "friction_first",
+  "description": "Short, conversational cold-email openers built around a specific current friction point and a likely business/user outcome.",
+  "opening_style": "Open as a first-person surface check: I was checking out, I opened, I downloaded, or I was on the product website/app.",
+  "angle_priorities": [
+    "Broken formatting, especially mobile layout issues.",
+    "Conversion friction such as unclear CTA, hidden signup/login, unnecessary onboarding steps, booking friction, checkout friction, or too many steps before value.",
+    "Weak proof, weak testimonials, weak case studies, external proof links, missing screenshots, or missing direct customer quotes.",
+    "Broad positioning or too many audiences/use cases when it likely hurts conversion.",
+    "App-store or public listing evidence only when it supports a specific activation/conversion/drop-off hypothesis.",
+    "Blog angles only when they directly reveal a positioning, onboarding, proof, or conversion issue."
+  ],
+  "preferred_phrases": [
+    "I was checking out the [product] app...",
+    "I opened the [product] app...",
+    "I downloaded the [product] app...",
+    "I was on the [product] website...",
+    "I'd guess...",
+    "I bet...",
+    "that could be costing..."
+  ],
+  "banned_phrases": [
+    "powerful",
+    "impressive",
+    "interesting",
+    "innovative",
+    "I love",
+    "I was impressed by",
+    "Hope you're well",
+    "smooth experience",
+    "seamless"
+  ],
+  "qc_focus": [
+    "One surface, one friction point, one outcome hypothesis.",
+    "No em dashes.",
+    "No generic praise.",
+    "No unsupported claims.",
+    "Must flow naturally into a pitch about finding where users drop off and why.",
+    "Low-confidence visual findings need manual review before being treated as confirmed."
+  ],
+  "example_good_lines": [
+    "I downloaded the FitRooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon.",
+    "I was on the SleepWorks website and noticed the case study links go to external sources rather than direct customer quotes on the page, pulling those quotes closer to the CTA would likely lift conversion."
+  ],
+  "example_bad_lines": [
+    "The product is powerful and could create a smoother experience.",
+    "I read your latest blog post and liked the way you explain the problem."
+  ]
+}

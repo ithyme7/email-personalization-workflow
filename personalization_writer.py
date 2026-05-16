@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from llm_client import LLMClient, LLMError, load_prompt
-from models import EvidenceResult, LeadInput, PersonalizationDraft
+from models import EvidenceResult, LeadInput, PersonalizationDraft, ToneProfile
 from evidence_extractor import evidence_to_payload
 
 
@@ -9,13 +9,15 @@ def write_personalization(
     client: LLMClient,
     lead: LeadInput,
     evidence: EvidenceResult,
+    tone_profile: ToneProfile | None = None,
     previous_failure_reasons: list[str] | None = None,
 ) -> PersonalizationDraft:
     prompt = load_prompt("write_personalization.txt")
+    next_sentence = lead.campaign_context.strip() or "We help mobile app teams with this type of work, figure out where users drop off and why."
     full_template = (
         "Hey [Name]\n"
         "{personalized_line}\n"
-        "We help mobile app teams with this type of work, figure out where users drop off and why.\n"
+        f"{next_sentence}\n"
         "In a recent app project, session replays showed users bouncing off a paywall because the copy was unclear. "
         "After the paywall was rewritten, conversion improved materially."
     )
@@ -36,9 +38,10 @@ def write_personalization(
         "recent_news_note": lead.recent_news_note,
         "competitor_context": lead.competitor_context,
         "email_template_context": full_template,
-        "required_next_sentence": "We help mobile app teams with this type of work, figure out where users drop off and why.",
+        "required_next_sentence": next_sentence,
         "evidence": evidence_to_payload(evidence),
         "possible_angles": evidence.possible_angles,
+        "tone_profile": tone_profile.to_prompt_payload() if tone_profile else {},
         "previous_failure_reasons": previous_failure_reasons or [],
     }
     try:

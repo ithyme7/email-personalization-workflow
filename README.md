@@ -32,6 +32,7 @@ The workflow is intentionally conservative: weak evidence should become a review
 - CSV or Excel output.
 - Dark-mode Excel dashboard with review, research, and summary tabs.
 - Model provider support for Gemini, OpenRouter, DeepSeek, and OpenAI-style chat APIs.
+- Tone profiles for different client styles and campaign types.
 
 ## Public Safety Notes
 
@@ -59,6 +60,7 @@ Gemini example:
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_key_here
 MODEL_NAME=gemini-3.1-flash-lite
+TONE_PROFILE=friction_first
 ```
 
 OpenRouter example:
@@ -98,14 +100,26 @@ Optional columns:
 ## Run The Sample
 
 ```bash
-python cli.py --input data/input/sample_companies.csv --output data/output/sample_output.xlsx --campaign-context "We help mobile app teams with this type of work, figure out where users drop off and why." --reuse-duplicate-personalization --client-batch-output
+python cli.py --input data/input/sample_companies.csv --output data/output/sample_output.xlsx --campaign-context "We help mobile app teams with this type of work, figure out where users drop off and why." --reuse-duplicate-personalization --client-batch-output --tone-profile friction_first
 ```
 
 ## Run A Real Batch
 
 ```bash
-python cli.py --input path/to/leads.csv --output data/output/personalization_review.xlsx --campaign-context "Your campaign context here" --reuse-duplicate-personalization --client-batch-output
+python cli.py --input path/to/leads.csv --output data/output/personalization_review.xlsx --campaign-context "Your campaign context here" --reuse-duplicate-personalization --client-batch-output --tone-profile friction_first
 ```
+
+## Tone Profiles
+
+Tone profiles live in `tone_profiles/` and can be selected with `--tone-profile`.
+
+Built-in profiles:
+
+- `friction_first`: short conversational lines focused on a current UX/conversion friction point.
+- `proof_led_b2b`: stronger emphasis on weak proof, trust leaks, case studies, and demo conversion.
+- `founder_casual`: warmer founder-to-founder style while staying evidence-led.
+
+You can add a new client profile by copying one JSON file and changing the opening style, banned phrases, QC focus, and examples.
 
 ## Build A Windows EXE
 
@@ -121,8 +135,27 @@ The Excel workbook includes:
 
 - `Dashboard`: batch status, review workload, source coverage, visual confidence, friction types, and quality flags.
 - `Review`: the main working tab with the personalized line, template preview, evidence, flags, and manual-review notes.
-- `Research Details`: longer evidence, screenshots, source URLs, visual observations, and angle-gate notes.
+- `Research Details`: longer evidence, screenshots, source URLs, visual observations, angle-gate notes, tone profile, and model metadata.
 - `Summary`: basic counts and usage notes.
+
+## Productized Service Workflow
+
+For client work, the recommended workflow is:
+
+1. Ask for the lead list, campaign context, target persona, and 3 to 5 examples of good/bad personalization.
+2. Create or select the closest tone profile.
+3. Run a small calibration batch of 10 to 25 leads.
+4. Review weak rows manually, especially app-first companies and low-confidence visual findings.
+5. Ask the client to mark 5 good lines and 5 off-tone lines.
+6. Tune the tone profile before scaling to larger batches.
+
+Useful internal docs:
+
+- `docs/OPERATING_SOP.md`
+- `docs/GO_TO_MARKET.md`
+- `docs/SECURITY_PRIVACY.md`
+- `docs/QUALITY_BENCHMARK.md`
+- `docs/DEMO_SCRIPT.md`
 
 ## Limitations
 

@@ -12,7 +12,7 @@ Check whether the draft follows the client's standard:
 - Uses "the [product] app" or "the [product] website" instead of a domain-first phrase when possible.
 - Names one specific issue, such as onboarding friction, unclear first action, booking friction, signup friction, paywall friction, dead button, weak proof, unclear value prop, or a website/app flow that could cause drop-off.
 - Ties that issue to user behaviour, activation, conversion, retention, bookings, signup completion, first-session churn, paywall conversion, or drop-off.
-- Flows naturally into: "We help mobile app teams with this type of work, figure out where users drop off and why."
+- Flows naturally into the required next sentence in email_template_context.
 - Reads like a mini hypothesis from someone who checked the app/page, not like a generic growth suggestion.
 - Prioritizes the configured issue types when supported by evidence: broken formatting, low-visibility CTA, unnecessary onboarding clicks, hidden signup/login options, checkout friction, weak proof/testimonials, weak case studies, or broad positioning.
 - Does not use a blog post as the angle unless the blog directly reveals a positioning, onboarding, conversion, or proof issue.
@@ -22,6 +22,7 @@ Check whether the draft follows the client's standard:
 - Tone is sharp, articulate, and natural.
 - Opening line is not too long.
 - Follows the instructions.
+- If a tone_profile is supplied, follows its opening_style, banned_phrases, QC focus, and example direction without inventing facts.
 
 Tone examples:
 - "I downloaded the FitRooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon."
@@ -38,7 +39,7 @@ Mandatory flags:
 - Include "too_long" if the opening line is over 40 words or feels bloated.
 - Include "ai_mush" if it sounds robotic, templated, or synthetic.
 - Include "missing_outcome_tie" if it does not connect to user behaviour, activation, conversion, retention, bookings, signup completion, or drop-off.
-- Include "poor_pitch_flow" if it does not naturally set up the supplied next sentence.
+- Include "poor_pitch_flow" if it does not naturally set up the supplied next sentence in email_template_context.
 - Include "missing_conversational_template_open" if it does not open like a first-person check of the app, landing page, or website.
 - Include "missing_specific_dropoff_hypothesis" if it does not name a specific issue and likely user/business impact.
 - Include "too_abstract" if it sounds like a general product suggestion rather than something currently observable.

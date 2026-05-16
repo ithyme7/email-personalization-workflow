@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from llm_client import LLMClient, LLMError, load_prompt
-from models import EvidenceFact, EvidenceResult, LeadInput, ResearchResult
+from models import EvidenceFact, EvidenceResult, LeadInput, ResearchResult, ToneProfile
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -13,7 +13,12 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def extract_evidence(client: LLMClient, lead: LeadInput, research: ResearchResult) -> EvidenceResult:
+def extract_evidence(
+    client: LLMClient,
+    lead: LeadInput,
+    research: ResearchResult,
+    tone_profile: ToneProfile | None = None,
+) -> EvidenceResult:
     prompt = load_prompt("evidence_extraction.txt")
     payload = {
         "company_name": lead.company_name,
@@ -33,6 +38,7 @@ def extract_evidence(client: LLMClient, lead: LeadInput, research: ResearchResul
         "competitor_context": lead.competitor_context,
         "website_research_text": research.summary,
         "source_urls": research.source_urls,
+        "tone_profile": tone_profile.to_prompt_payload() if tone_profile else {},
     }
     try:
         raw = client.complete_json(prompt, payload)

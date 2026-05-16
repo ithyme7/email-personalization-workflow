@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from llm_client import LLMClient, LLMError, load_prompt
-from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult
+from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ToneProfile
 from evidence_extractor import evidence_to_payload
 
 
@@ -95,8 +95,15 @@ def _local_flags(draft: PersonalizationDraft) -> list[str]:
     return flags
 
 
-def check_quality(client: LLMClient, lead: LeadInput, evidence: EvidenceResult, draft: PersonalizationDraft) -> QCResult:
+def check_quality(
+    client: LLMClient,
+    lead: LeadInput,
+    evidence: EvidenceResult,
+    draft: PersonalizationDraft,
+    tone_profile: ToneProfile | None = None,
+) -> QCResult:
     prompt = load_prompt("qc_personalization.txt")
+    next_sentence = lead.campaign_context.strip() or "We help mobile app teams with this type of work, figure out where users drop off and why."
     payload = {
         "company_name": lead.company_name,
         "website_url": lead.website_url,
@@ -110,7 +117,7 @@ def check_quality(client: LLMClient, lead: LeadInput, evidence: EvidenceResult, 
         "email_template_context": (
             "Hey [Name]\n"
             "{personalized_line}\n"
-            "We help mobile app teams with this type of work, figure out where users drop off and why.\n"
+            f"{next_sentence}\n"
             "In a recent app project, session replays showed users bouncing off a paywall because the copy was unclear. "
             "After the paywall was rewritten, conversion improved materially."
         ),
@@ -121,6 +128,7 @@ def check_quality(client: LLMClient, lead: LeadInput, evidence: EvidenceResult, 
             "chosen_angle": draft.chosen_angle,
             "evidence_used_for_copy": draft.evidence_used_for_copy,
         },
+        "tone_profile": tone_profile.to_prompt_payload() if tone_profile else {},
     }
     local_flags = _local_flags(draft)
     try:
