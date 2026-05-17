@@ -34,3 +34,6 @@ jobs:
       - name: Run run-history storage tests
         run: |
           python tests/test_run_history.py
+      - name: Run campaign feedback tests
+        run: |
+          python tests/test_campaign_feedback.py

@@ -28,7 +28,7 @@ De launcher kiest automatisch `localhost:8501`, of de volgende vrije poort als 8
 4. Kies een tone profile uit de 50 presets.
 5. Maak optioneel een klant-specifiek tone profile.
 6. Klik op `Run batch`.
-7. Volg de voortgang via de laadbalk.
+7. Volg de voortgang via de laadbalk. De run draait op de achtergrond, zodat de app status kan blijven tonen in plaats van te bevriezen.
 8. Bekijk het dashboard voor sendability, review workload, visual confidence, friction types, quality flags en kosteninschatting.
 9. Review en edit de rows in de `Review & Edit` tab.
 10. Zet per rij eventueel `human_decision`, `edited_line`, `edit_reason_category` en `edit_notes`.
@@ -50,6 +50,27 @@ De history gebruikt nu lokaal SQLite in plaats van alleen losse JSONL-regels. Da
 ## Tone calibration
 
 In `Tone Calibration` kun je feedback van een klant plakken, goede en slechte voorbeelden toevoegen en daar een nieuw client-specific profile van maken. Dit profile verschijnt daarna in de tone dropdown.
+
+## Snelle Review
+
+In `Review & Edit` staat boven de tabel een snelle review-panel.
+
+Links zie je:
+
+- het gevonden bewijs
+- bronlinks
+- hard-fail en soft-edit redenen
+- flags en review-notes
+
+Rechts zie je:
+
+- de volledige e-mailpreview
+- de huidige personalization line
+- jouw beslissing
+- een editveld
+- de reden en notes
+
+Gebruik dit panel voor de eerste kwaliteitsronde. De grote tabel blijft beschikbaar voor bulk edits en controle.
 
 ## Sendability gate
 
@@ -118,6 +139,28 @@ De template bevat ook uitleg en voorbeeldrijen, zodat de klant geen technische t
 
 Na uploaden zet de app de ingevulde feedback automatisch om naar een goldset.
 
+## Campagneresultaten Importeren
+
+In `Client Training` kun je ook een post-send feedback template downloaden.
+
+Vul daarin na een campagne simpele uitkomsten in:
+
+- `sent`
+- `opened`
+- `replied`
+- `positive_reply`
+- `booked`
+- `bad_fit_or_bounce`
+- `notes`
+
+Upload het ingevulde bestand daarna terug in de app. De resultaten worden lokaal opgeslagen in:
+
+```text
+data/campaign_feedback/campaign_results.csv
+```
+
+Dit traint nog geen model automatisch. Het zorgt er wel voor dat je later kunt meten welke soort lines, surfaces en evidence echt betere replies of bookings opleveren.
+
 ## Evals
 
 In de `Evals` tab meet de app de huidige sendability-gate tegen je `frozen_eval_set`.
@@ -181,6 +224,18 @@ MAX_LLM_CALLS_PER_BATCH=0
 ```
 
 `0` betekent uitgeschakeld. Als je hier limieten invult, stopt de workflow vóór de volgende API-call zodra de batch daaroverheen dreigt te gaan.
+
+## Browser Robustheid
+
+Voor sites die tijdelijk blokkeren, traag laden of dynamisch renderen kun je browser-retries en optionele browserconfig instellen:
+
+```text
+BROWSER_RETRY_ATTEMPTS=3
+BROWSER_PROXY_URL=
+BROWSER_USER_AGENT=
+```
+
+Laat `BROWSER_PROXY_URL` leeg tenzij je een legitieme proxy voor je eigen workflow hebt. Dit is bedoeld om tijdelijke failures en rate-limit ruis te verminderen, niet om toegang te forceren.
 
 ## Belangrijk
 

@@ -68,7 +68,10 @@ class BrowserRenderer:
         from playwright.sync_api import sync_playwright
 
         self._playwright = sync_playwright().start()
-        self.browser = self._playwright.chromium.launch(headless=True)
+        launch_options: dict[str, object] = {"headless": True}
+        if self.settings.browser_proxy_url:
+            launch_options["proxy"] = {"server": self.settings.browser_proxy_url}
+        self.browser = self._playwright.chromium.launch(**launch_options)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -82,13 +85,42 @@ class BrowserRenderer:
     def _new_page(self, width: int = 1440, height: int = 1200, is_mobile: bool = False):
         if not self.browser:
             raise RuntimeError("BrowserRenderer must be used as a context manager")
-        context = self.browser.new_context(
-            viewport={"width": width, "height": height},
-            is_mobile=is_mobile,
-            device_scale_factor=2 if is_mobile else 1,
-        )
+        context_options: dict[str, object] = {
+            "viewport": {"width": width, "height": height},
+            "is_mobile": is_mobile,
+            "device_scale_factor": 2 if is_mobile else 1,
+        }
+        if self.settings.browser_user_agent:
+            context_options["user_agent"] = self.settings.browser_user_agent
+        context = self.browser.new_context(**context_options)
         page = context.new_page()
         return context, page
+
+    def _retry_delay(self, attempt: int) -> float:
+        return min(8.0, 0.75 * (2 ** max(0, attempt - 1)))
+
+    def _goto_with_retry(self, page, url: str) -> None:
+        last_error: Exception | None = None
+        attempts = max(1, self.settings.browser_retry_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                response = page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=self.settings.request_timeout_seconds * 1000,
+                )
+                status = response.status if response else 0
+                if status in {403, 408, 429, 500, 502, 503, 504}:
+                    raise RuntimeError(f"HTTP {status}")
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt >= attempts:
+                    break
+                delay = self._retry_delay(attempt)
+                logging.info("Browser render retry %s/%s for %s after %s: waiting %.1fs", attempt + 1, attempts, url, exc, delay)
+                time.sleep(delay)
+        raise last_error or RuntimeError("Browser navigation failed")
 
     def fetch(self, url: str) -> RenderedPage | None:
         cached = _read_render_cache(url)
@@ -98,7 +130,7 @@ class BrowserRenderer:
         context = None
         try:
             context, page = self._new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+            self._goto_with_retry(page, url)
             page.wait_for_timeout(int(self.settings.browser_wait_seconds * 1000))
             final_url = page.url or url
             title, text, links = _clean_text_and_links(page.content(), final_url)
@@ -122,7 +154,7 @@ class BrowserRenderer:
             context = None
             try:
                 context, page = self._new_page(width, height, is_mobile)
-                page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+                self._goto_with_retry(page, url)
                 page.wait_for_timeout(int(self.settings.browser_wait_seconds * 1000))
                 final_url = page.url or url
                 screenshot_path = _screenshot_path(final_url, label, company_name)

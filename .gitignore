@@ -15,12 +15,14 @@ data/ui_uploads/*
 data/custom_tone_profiles/*
 data/run_history/*
 data/goldset/*
+data/campaign_feedback/*
 !data/cache/.gitkeep
 !data/output/.gitkeep
 !data/screenshots/.gitkeep
 !data/traces/.gitkeep
 !data/lighthouse/.gitkeep
 !data/goldset/.gitkeep
+!data/campaign_feedback/.gitkeep
 *.xlsx
 *.xls
 *.csv

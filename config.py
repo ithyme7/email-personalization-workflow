@@ -41,6 +41,9 @@ class Settings:
     request_delay_seconds: float
     browser_rendering: str
     browser_wait_seconds: float
+    browser_retry_attempts: int
+    browser_proxy_url: str
+    browser_user_agent: str
     visual_review: str
     advanced_detectors: str
     lighthouse_review: str
@@ -113,6 +116,9 @@ def load_settings() -> Settings:
         request_delay_seconds=max(0.0, _float_env("REQUEST_DELAY_SECONDS", 0.75)),
         browser_rendering=os.getenv("BROWSER_RENDERING", "auto").strip().lower(),
         browser_wait_seconds=max(0.5, _float_env("BROWSER_WAIT_SECONDS", 2.0)),
+        browser_retry_attempts=max(1, _int_env("BROWSER_RETRY_ATTEMPTS", 3)),
+        browser_proxy_url=os.getenv("BROWSER_PROXY_URL", "").strip(),
+        browser_user_agent=os.getenv("BROWSER_USER_AGENT", "").strip(),
         visual_review=os.getenv("VISUAL_REVIEW", "auto").strip().lower(),
         advanced_detectors=os.getenv("ADVANCED_DETECTORS", "auto").strip().lower(),
         lighthouse_review=os.getenv("LIGHTHOUSE_REVIEW", "off").strip().lower(),

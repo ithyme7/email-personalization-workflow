@@ -29,6 +29,7 @@ The workflow is intentionally conservative: weak evidence should become a review
 - App-first routing: when a mobile app is detected, app/onboarding evidence is prioritized over blog or generic website observations.
 - Product-surface classification for app-first products, website-first leadgen, B2B services, commerce pages, and marketplace/booking flows.
 - Optional Playwright checks for full-page desktop/mobile screenshots, selective trace files, visible CTA checks, and dead-link candidates.
+- Browser retry/backoff settings plus optional proxy and user-agent configuration for fragile or rate-limited sites.
 - Optional Lighthouse checks for mobile quality signals when enabled.
 - Local axe-core accessibility checks through the browser context for high-confidence accessibility/CTA issues.
 - Shareable screenshot assets copied next to the workbook and zipped into a delivery package. Raw traces stay internal.
@@ -42,6 +43,8 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Tone profiles for different client styles and campaign types.
 - Local Streamlit web app with CSV upload, campaign context, tone profile presets, custom prompt/profile builder, editable review rows, and CSV/XLSX export.
 - Accurate row-level progress bar in the web app.
+- Background batch execution in the web app, so the UI can keep showing status while a run is active.
+- Fast focused review panel with evidence and email preview side by side for human-in-the-loop validation.
 - Optional Google Sheets input and Google Sheets export.
 - Batch cost estimate using editable model-price assumptions.
 - Optional LLM cost/call circuit breaker with `MAX_BATCH_COST_USD` and `MAX_LLM_CALLS_PER_BATCH`.
@@ -58,6 +61,7 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Judge bakeoff CLI for comparing judge models against a goldset when an API key is available.
 - CI checks with a synthetic frozen-eval fixture, manifest checksum, privacy tests, and guardrail tests.
 - Client training template so non-technical clients can mark Send as is, Rewrite, or Reject.
+- Post-send campaign-results import for opens, replies, positive replies, bookings, bounces, and notes.
 - Client delivery export with a smaller column set for handoff.
 - Schema-first row provenance using Pydantic-backed canonical rows.
 - Central taxonomy for quality flags, friction types, outcome terms, and surface terms.
@@ -111,6 +115,16 @@ MAX_LLM_CALLS_PER_BATCH=0
 ```
 
 `0` means disabled. Set these for paid batches when you want the workflow to stop before an unexpected model-cost spike.
+
+Optional browser robustness settings:
+
+```env
+BROWSER_RETRY_ATTEMPTS=3
+BROWSER_PROXY_URL=
+BROWSER_USER_AGENT=
+```
+
+Leave `BROWSER_PROXY_URL` empty unless you have a legitimate proxy for your own workflow. These settings reduce transient fetch failures and rate-limit noise; they are not intended to bypass access controls.
 
 ## Screenshot OCR Privacy Check
 
@@ -193,6 +207,7 @@ The web app supports:
 - optional client-specific custom prompt/profile creation
 - run batch button
 - row-level progress bar
+- background run status updates while the batch is processing
 - dashboard with review workload, visual confidence, friction types, quality flags, and estimated model cost
 - sendability dashboard showing Send/Edit/Reject split, hard-fail reasons, soft-edit reasons, and surface correctness
 - Evals tab for frozen goldset agreement, send precision, false sends, and eval report export
@@ -200,6 +215,7 @@ The web app supports:
 - batch history
 - tone calibration from client feedback
 - review/edit rows
+- focused review mode with evidence, source links, email preview, decision, rewrite, and notes on one screen
 - human review fields for final decision, edited line, edit reason, and notes
 - export edited CSV
 - export edited XLSX
@@ -320,6 +336,8 @@ The exported workbook asks the client to fill in simple fields:
 - `what_good_should_sound_like`: plain-language tone guidance.
 
 When imported back into the web app, the feedback is normalized into the selected goldset split. Rewrites become preferred examples and the original lines become non-preferred examples.
+
+The same tab also supports post-send campaign results. Export the campaign-results template, fill in delivery outcomes such as opened, replied, positive reply, booked, bounce/bad fit, and notes, then import it back into the app. This does not fine-tune a model automatically; it creates a clean feedback dataset that can later be used to evaluate which surfaces, tones, and evidence types actually correlate with campaign outcomes.
 
 ## Productized Service Workflow
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from campaign_feedback import append_campaign_feedback, campaign_feedback_template_bytes, load_campaign_feedback, normalize_campaign_feedback, read_campaign_feedback
 from client_training import append_training_feedback_to_goldset, normalize_training_feedback, read_training_feedback, training_template_bytes
 from eval_runner import evaluate_frozen_goldset, evaluate_release_gate, export_frozen_eval_report
 from sendability import GOLDSET_SPLITS
@@ -136,3 +137,32 @@ I'll use the completed sheet to tune the workflow/model around your preferred to
         "- `Surface to focus on`: where the observation should come from, such as app onboarding, App Store reviews, booking flow, or landing page."
     )
 
+    st.divider()
+    st.subheader("Post-send campaign results")
+    st.caption("Optional long-term feedback loop. Import open/reply/booked outcomes after a campaign so future calibration can use real performance data.")
+    campaign_template_df = st.session_state.get("review_df")
+    st.download_button(
+        "Download campaign results template",
+        campaign_feedback_template_bytes(campaign_template_df),
+        "campaign_results_template.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    campaign_feedback = st.file_uploader("Completed campaign results", type=["xlsx", "csv"], key="campaign_results_upload")
+    if campaign_feedback is not None:
+        try:
+            raw_campaign = read_campaign_feedback(campaign_feedback)
+            normalized_campaign = normalize_campaign_feedback(raw_campaign)
+            if normalized_campaign.empty:
+                st.warning("No rows with campaign outcome signals were found.")
+            else:
+                st.dataframe(normalized_campaign, use_container_width=True, height=260)
+            if st.button("Import campaign results", use_container_width=True):
+                path, count, _ = append_campaign_feedback(campaign_feedback)
+                st.success(f"Imported {count} campaign result rows into {path}")
+        except Exception as exc:
+            st.error(f"Could not import campaign results: {exc}")
+    existing_campaign = load_campaign_feedback(limit=25)
+    if not existing_campaign.empty:
+        with st.expander("Recent imported campaign results"):
+            st.dataframe(existing_campaign, use_container_width=True, height=240)

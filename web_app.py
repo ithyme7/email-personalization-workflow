@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
+import threading
+import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -459,6 +462,140 @@ def _run_batch(
     return rows, output_path
 
 
+def _store_batch_result(
+    rows: list[dict[str, Any]],
+    output_path: Path,
+    input_path: Path,
+    tone_profile: str,
+    provider: str,
+    model_name: str,
+    input_price: float,
+    output_price: float,
+) -> CostEstimate:
+    cost = estimate_batch_cost(rows, input_price, output_price)
+    for row in rows:
+        row["estimated_model_cost_usd"] = round(cost.estimated_cost_usd, 6)
+    st.session_state["rows"] = rows
+    st.session_state["review_df"] = _rows_to_review_df(rows)
+    st.session_state["output_path"] = str(output_path)
+    st.session_state["last_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    st.session_state["cost_estimate"] = cost
+    append_run_history(
+        _batch_summary(
+            st.session_state["review_df"],
+            cost,
+            output_path,
+            input_path,
+            tone_profile,
+            provider,
+            model_name,
+        )
+    )
+    return cost
+
+
+def _start_background_batch(
+    input_path: Path,
+    campaign_context: str,
+    tone_profile: str,
+    provider: str,
+    model_name: str,
+    api_key: str,
+    input_price: float,
+    output_price: float,
+    advanced_detectors: bool,
+    lighthouse_review: bool,
+) -> None:
+    progress_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+    output_path = _output_path(input_path)
+    job = {
+        "queue": progress_queue,
+        "started_at": time.time(),
+        "last_progress": {"progress": 0.0, "stage": "Queued", "current": 0, "total": 0},
+        "done": False,
+    }
+    st.session_state["batch_job"] = job
+
+    def worker() -> None:
+        try:
+            _set_api_env(provider, api_key, model_name)
+            _set_detector_env(advanced_detectors, lighthouse_review)
+            rows = run(
+                _make_args(input_path, output_path, campaign_context, tone_profile),
+                progress_callback=lambda payload: progress_queue.put({"type": "progress", **payload}),
+            )
+            progress_queue.put(
+                {
+                    "type": "done",
+                    "rows": rows,
+                    "output_path": str(output_path),
+                    "input_path": str(input_path),
+                    "tone_profile": tone_profile,
+                    "provider": provider,
+                    "model_name": model_name,
+                    "input_price": input_price,
+                    "output_price": output_price,
+                }
+            )
+        except Exception as exc:
+            progress_queue.put({"type": "error", "message": str(exc)})
+
+    thread = threading.Thread(target=worker, name="email-personalizer-batch", daemon=True)
+    job["thread"] = thread
+    thread.start()
+
+
+def _render_background_batch_status() -> None:
+    job = st.session_state.get("batch_job")
+    if not job:
+        return
+    progress_queue = job.get("queue")
+    if not isinstance(progress_queue, queue.Queue):
+        return
+
+    while True:
+        try:
+            event = progress_queue.get_nowait()
+        except queue.Empty:
+            break
+        event_type = event.get("type")
+        if event_type == "progress":
+            job["last_progress"] = event
+        elif event_type == "done":
+            rows = event["rows"]
+            output_path = Path(event["output_path"])
+            input_path = Path(event["input_path"])
+            _store_batch_result(
+                rows,
+                output_path,
+                input_path,
+                event["tone_profile"],
+                event["provider"],
+                event["model_name"],
+                float(event["input_price"]),
+                float(event["output_price"]),
+            )
+            st.session_state.pop("batch_job", None)
+            st.success(f"Batch ready: {len(rows)} rows. Output saved to {output_path}")
+            return
+        elif event_type == "error":
+            st.session_state.pop("batch_job", None)
+            st.error(event.get("message", "Batch failed."))
+            return
+
+    last = job.get("last_progress", {})
+    progress = max(0.0, min(1.0, float(last.get("progress", 0.0))))
+    current = last.get("current", 0)
+    total = last.get("total", 0)
+    stage = last.get("stage", "Running")
+    company = last.get("company", "")
+    suffix = f" - {company}" if company else ""
+    st.progress(progress, text=f"{stage}: {current}/{total}{suffix}")
+    st.caption("Batch is running in the background. The UI will refresh while progress updates arrive.")
+    time.sleep(0.8)
+    st.rerun()
+
+
 def _count_status(df: pd.DataFrame, status: str) -> int:
     return int((df["status"] == status).sum()) if "status" in df else 0
 
@@ -581,6 +718,66 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
         else:
             queue = df[df["status"].isin(["Review", "Research only"])] if "status" in df else df
         st.dataframe(queue[review_cols], use_container_width=True, height=300)
+
+
+def _focused_review_panel(filtered: pd.DataFrame) -> None:
+    if filtered.empty:
+        st.info("No rows match the current filters.")
+        return
+    priority = filtered.copy()
+    if "sendability_decision" in priority:
+        priority["_sort"] = priority["sendability_decision"].map({"Edit": 0, "Reject": 1, "Send": 2}).fillna(3)
+        priority = priority.sort_values(["_sort"])
+    labels: list[str] = []
+    index_by_label: dict[str, Any] = {}
+    for idx, row in priority.iterrows():
+        company = str(row.get("company", "Company") or "Company")
+        person = str(row.get("person", "") or "").strip()
+        decision = str(row.get("sendability_decision", "") or "").strip()
+        label = f"{idx} | {company}" + (f" / {person}" if person else "") + (f" [{decision}]" if decision else "")
+        labels.append(label)
+        index_by_label[label] = idx
+    selected_label = st.selectbox("Focused row", labels, key="focused_review_row")
+    selected_idx = index_by_label[selected_label]
+    row = st.session_state["review_df"].loc[selected_idx]
+
+    line = str(row.get("edited_line") or row.get("personalized_line") or "")
+    preview = str(row.get("template_preview") or f"Hey {row.get('person', '[Name]')}\n\n{line}\n\n{DEFAULT_CONTEXT}")
+    evidence = str(row.get("evidence_found") or row.get("evidence_used_for_copy") or "")
+    sources = str(row.get("source_urls") or "")
+    reasons = " | ".join(
+        str(row.get(column, "") or "")
+        for column in ["hard_fail_reasons", "soft_edit_reasons", "quality_flags", "reviewer_notes"]
+        if str(row.get(column, "") or "").strip()
+    )
+
+    left, right = st.columns([1.05, 1])
+    with left:
+        st.markdown("**Evidence to verify**")
+        st.text_area("Evidence", evidence, height=150, disabled=True, label_visibility="collapsed")
+        if sources:
+            st.caption(f"Sources: {sources}")
+        st.markdown("**Why this needs attention**")
+        st.text_area("Reasons", reasons or "No major flags.", height=110, disabled=True, label_visibility="collapsed")
+    with right:
+        st.markdown("**Email preview**")
+        st.text_area("Preview", preview, height=150, disabled=True, label_visibility="collapsed")
+        current_decision = str(row.get("human_decision", "unreviewed") or "unreviewed").lower()
+        decision_index = HUMAN_DECISIONS.index(current_decision) if current_decision in HUMAN_DECISIONS else 0
+        human_decision = st.selectbox("Decision", HUMAN_DECISIONS, index=decision_index, key=f"focus_decision_{selected_idx}")
+        edited_line = st.text_area("Edited line", str(row.get("edited_line", "") or ""), height=92, key=f"focus_edit_{selected_idx}")
+        current_reason = str(row.get("edit_reason_category", "not_reviewed") or "not_reviewed")
+        reason_index = EDIT_REASON_CATEGORIES.index(current_reason) if current_reason in EDIT_REASON_CATEGORIES else 0
+        edit_reason = st.selectbox("Edit reason", EDIT_REASON_CATEGORIES, index=reason_index, key=f"focus_reason_{selected_idx}")
+        edit_notes = st.text_area("Review notes", str(row.get("edit_notes", "") or ""), height=70, key=f"focus_notes_{selected_idx}")
+        if st.button("Save focused review", use_container_width=True):
+            updated = st.session_state["review_df"].copy()
+            updated.at[selected_idx, "human_decision"] = human_decision
+            updated.at[selected_idx, "edited_line"] = edited_line
+            updated.at[selected_idx, "edit_reason_category"] = edit_reason
+            updated.at[selected_idx, "edit_notes"] = edit_notes
+            st.session_state["review_df"] = apply_sendability_to_dataframe(updated)
+            st.success("Focused review saved.")
 
 
 def _how_it_works_panel() -> None:
@@ -788,8 +985,13 @@ def main() -> None:
             st.subheader("3. Tone")
             tone_for_run = _profile_picker()
 
+            _render_background_batch_status()
+            batch_running = "batch_job" in st.session_state
             if st.button("Run batch", type="primary", use_container_width=True):
                 try:
+                    if batch_running:
+                        st.warning("A batch is already running.")
+                        st.stop()
                     if input_source == "CSV upload":
                         if uploaded_file is None:
                             st.error("Upload a CSV first.")
@@ -805,7 +1007,7 @@ def main() -> None:
                             st.error("Sample CSV is missing.")
                             st.stop()
                         input_path = SAMPLE_INPUT_PATH
-                    rows, output_path = _run_batch(
+                    _start_background_batch(
                         input_path,
                         campaign_context,
                         tone_for_run,
@@ -817,7 +1019,7 @@ def main() -> None:
                         advanced_detectors,
                         lighthouse_review,
                     )
-                    st.success(f"Batch ready: {len(rows)} rows. Output saved to {output_path}")
+                    st.rerun()
                 except Exception as exc:
                     st.error(str(exc))
 
@@ -871,6 +1073,8 @@ def main() -> None:
             if surface_filter and "surface_correctness" in filtered:
                 filtered = filtered[filtered["surface_correctness"].isin(surface_filter)]
             st.caption("Use `human_decision`, `edited_line`, and `edit_reason_category` to turn reviewed rows into a reusable goldset.")
+            with st.expander("Fast focused review", expanded=True):
+                _focused_review_panel(filtered)
             edited = st.data_editor(
                 filtered,
                 use_container_width=True,
