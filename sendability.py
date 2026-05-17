@@ -2,15 +2,35 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+import hashlib
 from pathlib import Path
 from typing import Any, Mapping
 
 import pandas as pd
 
 from config import DATA_DIR
+from schemas import canonicalize_dataframe, canonicalize_row
+from taxonomy import (
+    APP_SURFACE_TERMS,
+    B2B_TERMS,
+    BOOKING_TERMS,
+    COMMERCE_TERMS,
+    CONVERSATIONAL_STARTS,
+    EDIT_QUALITY_FLAGS,
+    OUTCOME_TERMS,
+    SEVERE_QUALITY_FLAGS,
+    VISUAL_CLAIM_TERMS,
+    WEBSITE_SURFACE_TERMS,
+)
 
 
 SENDABILITY_COLUMNS = [
+    "row_id",
+    "run_id",
+    "example_id",
+    "model_opening_line",
+    "current_opening_line",
+    "final_delivery_line",
     "sendability_decision",
     "sendability_score",
     "sendability_reasons",
@@ -60,13 +80,25 @@ GOLDSET_SPLITS = ["reviewed_examples", "frozen_eval_set", "candidate_training_se
 
 GOLDSET_COLUMNS = [
     "created_at",
+    "imported_at",
     "goldset_split",
+    "example_id",
+    "row_id",
+    "run_id",
+    "source_kind",
+    "origin_run_id",
+    "origin_row_id",
+    "label_source",
     "is_frozen_eval_example",
     "is_training_candidate",
     "company",
     "person",
     "role",
     "website",
+    "model_opening_line",
+    "current_opening_line",
+    "final_delivery_line",
+    "template_preview",
     "original_line",
     "edited_line",
     "preferred_line",
@@ -106,137 +138,6 @@ GOLDSET_COLUMNS = [
     "judge_model",
 ]
 
-SEVERE_FLAGS = {
-    "ai_generation_unavailable",
-    "research_failed",
-    "evidence_failed",
-    "unsupported_claims",
-    "unsupported_claim",
-    "hallucination",
-    "em_dash",
-    "invalid_json",
-}
-
-EDIT_FLAGS = {
-    "genericness",
-    "generic",
-    "too_generic",
-    "manual_review",
-    "weak_evidence",
-    "blog_angle_low_value",
-    "technical_audit_language",
-    "wrong_surface",
-    "low_confidence_visual_finding",
-    "thin_content",
-}
-
-OUTCOME_TERMS = {
-    "activation",
-    "activate",
-    "activated",
-    "booking",
-    "bookings",
-    "signup",
-    "sign-up",
-    "sign up",
-    "conversion",
-    "convert",
-    "converts",
-    "converted",
-    "drop off",
-    "drop-off",
-    "dropoff",
-    "retention",
-    "retain",
-    "churn",
-    "paywall",
-    "subscription",
-    "checkout",
-    "first session",
-    "onboarding",
-    "revenue",
-    "users",
-    "user",
-    "trial",
-    "install",
-    "download",
-    "book",
-    "bouncing",
-    "bounce",
-}
-
-CONVERSATIONAL_STARTS = (
-    "i was checking",
-    "i was just checking",
-    "i just checked",
-    "i checked",
-    "i opened",
-    "i downloaded",
-    "i tried",
-    "i clicked",
-    "i went through",
-    "i was on",
-    "i had a look",
-)
-
-VISUAL_CLAIM_TERMS = {
-    "button",
-    "cta",
-    "first load",
-    "screen",
-    "page",
-    "mobile",
-    "formatting",
-    "layout",
-    "click",
-    "clicked",
-    "tap",
-    "above the fold",
-    "hard to see",
-    "easy to miss",
-    "broken",
-}
-
-APP_SURFACE_TERMS = {
-    "app",
-    "mobile app",
-    "app store",
-    "google play",
-    "play store",
-    "onboarding",
-    "signup",
-    "sign-up",
-    "sign up",
-    "paywall",
-    "subscription",
-    "access code",
-    "download",
-    "install",
-    "first screen",
-    "first session",
-    "review",
-    "rating",
-    "screenshots",
-}
-
-WEBSITE_SURFACE_TERMS = {
-    "website",
-    "landing page",
-    "homepage",
-    "site",
-    "page",
-    "cta",
-    "form",
-    "demo",
-    "case study",
-    "testimonial",
-    "proof",
-}
-
-BOOKING_TERMS = {"booking", "book", "slot", "availability", "appointment", "reservation", "calendar"}
-COMMERCE_TERMS = {"checkout", "cart", "buy", "purchase", "product page", "shipping", "price", "subscription"}
-B2B_TERMS = {"demo", "case study", "testimonial", "proof", "roi", "customer", "sales", "lead"}
-
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -275,6 +176,75 @@ def _dedupe(items: list[str]) -> list[str]:
             continue
         seen.add(clean)
         out.append(clean)
+    return out
+
+
+def _hash_parts(*values: Any) -> str:
+    payload = "\n".join(_text(value).lower() for value in values if _text(value))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16] if payload else ""
+
+
+def _series_or_blank(df: pd.DataFrame, column: str) -> pd.Series:
+    if column in df:
+        return df[column].fillna("").astype(str)
+    return pd.Series([""] * len(df), index=df.index, dtype=str)
+
+
+def ensure_line_provenance(df: pd.DataFrame) -> pd.DataFrame:
+    """Add non-destructive line provenance columns used by review, evals and training."""
+    out = df.copy()
+    current = _series_or_blank(out, "personalized_line")
+    if current.str.strip().eq("").all() and "opening_line" in out:
+        current = _series_or_blank(out, "opening_line")
+
+    original_candidates = [
+        "model_opening_line",
+        "original_line",
+        "non_preferred_line",
+        "personalized_line",
+        "opening_line",
+    ]
+    model_line = pd.Series([""] * len(out), index=out.index, dtype=str)
+    for column in original_candidates:
+        candidate = _series_or_blank(out, column)
+        model_line = model_line.mask(model_line.str.strip().eq(""), candidate)
+
+    if "model_opening_line" in out:
+        existing_model = _series_or_blank(out, "model_opening_line")
+        out["model_opening_line"] = existing_model.mask(existing_model.str.strip().eq(""), model_line)
+    else:
+        out["model_opening_line"] = model_line
+
+    out["current_opening_line"] = current.mask(current.str.strip().eq(""), _series_or_blank(out, "current_opening_line"))
+
+    human = _series_or_blank(out, "human_decision").str.lower()
+    edited = _series_or_blank(out, "edited_line")
+    final_line = out["current_opening_line"].copy()
+    use_edit = human.isin({"send", "edit"}) & edited.str.strip().ne("")
+    final_line = final_line.mask(use_edit, edited)
+    out["final_delivery_line"] = final_line
+
+    if "row_id" not in out or _series_or_blank(out, "row_id").str.strip().eq("").any():
+        existing_row_id = _series_or_blank(out, "row_id")
+        generated = pd.Series([str(i + 1) for i in range(len(out))], index=out.index, dtype=str)
+        out["row_id"] = existing_row_id.mask(existing_row_id.str.strip().eq(""), generated)
+    if "run_id" not in out:
+        out["run_id"] = ""
+    if "example_id" not in out:
+        out["example_id"] = ""
+    existing_example = _series_or_blank(out, "example_id")
+    generated_ids = out.apply(
+        lambda row: _hash_parts(
+            row.get("run_id"),
+            row.get("row_id"),
+            row.get("company"),
+            row.get("person"),
+            row.get("website"),
+            row.get("model_opening_line"),
+        ),
+        axis=1,
+    )
+    out["example_id"] = existing_example.mask(existing_example.str.strip().eq(""), generated_ids)
     return out
 
 
@@ -525,6 +495,7 @@ def evaluate_surface_correctness(row: Mapping[str, Any]) -> tuple[str, int, list
 
 
 def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
+    row = canonicalize_row(dict(row))
     line = _text(row.get("personalized_line") or row.get("opening_line"))
     status = _lower(row.get("status"))
     quality_flags = _split_flags(row.get("quality_flags"))
@@ -546,8 +517,8 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
         hard_reasons.append("research_only")
     if _is_yes(row.get("needs_manual_review")):
         soft_reasons.append("marked_for_manual_review")
-    severe_matches = sorted(flag for flag in quality_flags if flag in SEVERE_FLAGS)
-    edit_matches = sorted(flag for flag in quality_flags if flag in EDIT_FLAGS)
+    severe_matches = sorted(flag for flag in quality_flags if flag in SEVERE_QUALITY_FLAGS)
+    edit_matches = sorted(flag for flag in quality_flags if flag in EDIT_QUALITY_FLAGS)
     hard_reasons.extend(severe_matches)
     soft_reasons.extend(edit_matches)
     hard_reasons.extend(evidence_hard)
@@ -619,7 +590,7 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def apply_sendability_to_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
+    out = canonicalize_dataframe(df)
     for column in SENDABILITY_COLUMNS:
         if column not in out.columns:
             if column == "human_decision":
@@ -628,6 +599,7 @@ def apply_sendability_to_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 out[column] = "not_reviewed"
             else:
                 out[column] = ""
+    out = ensure_line_provenance(out)
     for idx, row in out.iterrows():
         result = evaluate_sendability(row.to_dict())
         for key, value in result.items():
@@ -661,16 +633,17 @@ def goldset_paths() -> dict[str, Path]:
 def _preferred_line(row: Mapping[str, Any]) -> str:
     human_decision = _lower(row.get("human_decision"))
     edited = _text(row.get("edited_line"))
-    original = _text(row.get("personalized_line") or row.get("opening_line"))
+    current = _text(row.get("current_opening_line") or row.get("personalized_line") or row.get("opening_line"))
+    final = _text(row.get("final_delivery_line"))
     if human_decision in {"send", "edit"}:
-        return edited or original
+        return edited or final or current
     return ""
 
 
 def _non_preferred_line(row: Mapping[str, Any]) -> str:
     human_decision = _lower(row.get("human_decision"))
     edited = _text(row.get("edited_line"))
-    original = _text(row.get("personalized_line") or row.get("opening_line"))
+    original = _text(row.get("model_opening_line") or row.get("original_line") or row.get("personalized_line") or row.get("opening_line"))
     if human_decision == "reject":
         return original
     if edited and edited != original:
@@ -691,9 +664,15 @@ def rows_for_goldset(df: pd.DataFrame, split: str = "reviewed_examples") -> pd.D
 
     selected["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     selected["goldset_split"] = split
+    selected["source_kind"] = selected.get("source_kind", "operator_review")
+    selected["origin_run_id"] = selected.get("origin_run_id", selected.get("run_id", ""))
+    selected["origin_row_id"] = selected.get("origin_row_id", selected.get("row_id", ""))
+    selected["label_source"] = selected.get("label_source", "internal_reviewer")
     selected["is_frozen_eval_example"] = "yes" if split == "frozen_eval_set" else "no"
     selected["is_training_candidate"] = "yes" if split == "candidate_training_set" else "no"
-    selected["original_line"] = selected.get("personalized_line", "")
+    selected["original_line"] = selected.get("model_opening_line", selected.get("personalized_line", ""))
+    selected["current_opening_line"] = selected.get("current_opening_line", selected.get("personalized_line", ""))
+    selected["final_delivery_line"] = selected.get("final_delivery_line", selected.get("edited_line", ""))
     selected["preferred_line"] = selected.apply(lambda row: _preferred_line(row.to_dict()), axis=1)
     selected["non_preferred_line"] = selected.apply(lambda row: _non_preferred_line(row.to_dict()), axis=1)
     selected["surface_used"] = selected.get("surface_checked", "")
@@ -725,6 +704,8 @@ def append_goldset_feedback(df: pd.DataFrame, split: str = "reviewed_examples", 
             if column not in existing:
                 existing[column] = ""
         rows = pd.concat([existing[GOLDSET_COLUMNS], rows], ignore_index=True)
+        if "example_id" in rows:
+            rows = rows.drop_duplicates(subset=["goldset_split", "example_id"], keep="last")
     rows.to_csv(path, index=False, encoding="utf-8-sig")
     return path, len(rows_for_goldset(df, split=split))
 

@@ -10,12 +10,6 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.common.exceptions import TimeoutException, WebDriverException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 
 from config import CACHE_DIR, SCREENSHOT_DIR, Settings
 
@@ -67,84 +61,87 @@ def _clean_text_and_links(html: str, base_url: str) -> tuple[str, str, list[str]
 class BrowserRenderer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.driver: webdriver.Chrome | None = None
+        self._playwright = None
+        self.browser = None
 
     def __enter__(self) -> "BrowserRenderer":
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-notifications")
-        options.add_argument("--disable-popup-blocking")
-        options.add_argument("--log-level=3")
-        options.add_argument("--window-size=1440,1200")
-        options.page_load_strategy = "eager"
-        self.driver = webdriver.Chrome(options=options)
-        self.driver.set_page_load_timeout(self.settings.request_timeout_seconds)
+        from playwright.sync_api import sync_playwright
+
+        self._playwright = sync_playwright().start()
+        self.browser = self._playwright.chromium.launch(headless=True)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
+        if self.browser:
+            self.browser.close()
+            self.browser = None
+        if self._playwright:
+            self._playwright.stop()
+            self._playwright = None
+
+    def _new_page(self, width: int = 1440, height: int = 1200, is_mobile: bool = False):
+        if not self.browser:
+            raise RuntimeError("BrowserRenderer must be used as a context manager")
+        context = self.browser.new_context(
+            viewport={"width": width, "height": height},
+            is_mobile=is_mobile,
+            device_scale_factor=2 if is_mobile else 1,
+        )
+        page = context.new_page()
+        return context, page
 
     def fetch(self, url: str) -> RenderedPage | None:
         cached = _read_render_cache(url)
         if cached:
             return cached
-        if not self.driver:
-            raise RuntimeError("BrowserRenderer must be used as a context manager")
 
+        context = None
         try:
-            self.driver.get(url)
-            WebDriverWait(self.driver, self.settings.request_timeout_seconds).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            time.sleep(self.settings.browser_wait_seconds)
-            final_url = self.driver.current_url or url
-            title, text, links = _clean_text_and_links(self.driver.page_source, final_url)
-            page = RenderedPage(url=final_url, title=title, text=text, links=links)
-            _write_render_cache(url, page)
-            return page
-        except TimeoutException as exc:
-            logging.warning("Browser render timed out for %s: %s", url, exc)
-            return None
-        except WebDriverException as exc:
+            context, page = self._new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+            page.wait_for_timeout(int(self.settings.browser_wait_seconds * 1000))
+            final_url = page.url or url
+            title, text, links = _clean_text_and_links(page.content(), final_url)
+            page_result = RenderedPage(url=final_url, title=title, text=text, links=links)
+            _write_render_cache(url, page_result)
+            return page_result
+        except Exception as exc:
             logging.warning("Browser render failed for %s: %s", url, exc)
             return None
+        finally:
+            if context:
+                context.close()
 
     def visual_review(self, url: str, company_name: str = "") -> VisualReview:
-        if not self.driver:
-            raise RuntimeError("BrowserRenderer must be used as a context manager")
-
         result = VisualReview()
         viewports = [
-            ("desktop", 1440, 1200),
-            ("mobile", 390, 844),
+            ("desktop", 1440, 1200, False),
+            ("mobile", 390, 844, True),
         ]
-        for label, width, height in viewports:
+        for label, width, height, is_mobile in viewports:
+            context = None
             try:
-                self.driver.set_window_size(width, height)
-                self.driver.get(url)
-                WebDriverWait(self.driver, self.settings.request_timeout_seconds).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-                time.sleep(self.settings.browser_wait_seconds)
-                final_url = self.driver.current_url or url
+                context, page = self._new_page(width, height, is_mobile)
+                page.goto(url, wait_until="domcontentloaded", timeout=self.settings.request_timeout_seconds * 1000)
+                page.wait_for_timeout(int(self.settings.browser_wait_seconds * 1000))
+                final_url = page.url or url
                 screenshot_path = _screenshot_path(final_url, label, company_name)
-                self.driver.save_screenshot(str(screenshot_path))
+                page.screenshot(path=str(screenshot_path), full_page=True)
                 result.screenshot_paths.append(str(screenshot_path.resolve()))
-                analysis = self.driver.execute_script(_VISUAL_ANALYSIS_SCRIPT)
+                analysis = page.evaluate(_VISUAL_ANALYSIS_SCRIPT.replace("return ", "", 1))
                 observations, flags, confidence_reasons, confidence_scores = _visual_observations(label, analysis or {})
                 result.observations.extend(observations)
                 result.quality_flags.extend(flags)
                 result.confidence_reasons.extend(confidence_reasons)
                 result.confidence_score = max([result.confidence_score] + confidence_scores)
-            except (TimeoutException, WebDriverException) as exc:
+            except Exception as exc:
                 logging.warning("Visual review failed for %s on %s: %s", url, label, exc)
                 result.quality_flags.append("visual_review_failed")
                 result.observations.append(f"{label}: visual review failed, manual check needed")
                 result.confidence_reasons.append(f"{label}: visual review failed, so confidence is low.")
+            finally:
+                if context:
+                    context.close()
 
         result.quality_flags = list(dict.fromkeys(result.quality_flags))
         result.observations = list(dict.fromkeys(result.observations))

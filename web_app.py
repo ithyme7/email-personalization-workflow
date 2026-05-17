@@ -12,11 +12,9 @@ import pandas as pd
 import streamlit as st
 
 from client_safe_export import create_client_safe_package
-from client_training import append_training_feedback_to_goldset, normalize_training_feedback, read_training_feedback, training_template_bytes
-from cli import run
+from batch_runner import run
 from config import DATA_DIR, OUTPUT_DIR, load_settings
 from cost_estimator import CostEstimate, estimate_batch_cost, price_for_model
-from eval_runner import evaluate_frozen_goldset, export_frozen_eval_report
 from export import CLIENT_REVIEW_COLUMNS, _client_rows
 from google_sheets import (
     GoogleSheetsError,
@@ -37,6 +35,7 @@ from sendability import (
 )
 from tone_preset_library import get_preset_profile, preset_options
 from tone_profiles import available_tone_profiles, load_tone_profile
+from web_app_views import render_eval_tab, render_training_tab
 
 
 DEFAULT_CONTEXT = "We help mobile app teams with this type of work, figure out where users drop off and why."
@@ -939,7 +938,7 @@ def main() -> None:
                 st.session_state["review_df"] = apply_sendability_to_dataframe(updated)
                 st.success("Edits saved in this session.")
             c1, c2 = st.columns(2)
-            if c1.button("Apply edited lines to personalization", use_container_width=True):
+            if c1.button("Apply edited lines to current personalization", use_container_width=True):
                 updated = st.session_state["review_df"].copy()
                 if {"human_decision", "edited_line", "personalized_line"}.issubset(updated.columns):
                     mask = (
@@ -948,7 +947,7 @@ def main() -> None:
                     )
                     updated.loc[mask, "personalized_line"] = updated.loc[mask, "edited_line"]
                     st.session_state["review_df"] = apply_sendability_to_dataframe(updated)
-                    st.success(f"Applied edited lines to {int(mask.sum())} rows.")
+                    st.success(f"Applied edited lines to {int(mask.sum())} rows. Original model lines were preserved for goldset/training.")
             goldset_split = st.selectbox(
                 "Goldset destination",
                 GOLDSET_SPLITS,
@@ -1080,121 +1079,10 @@ def main() -> None:
                     st.caption("No saved goldset yet. Review rows first, then click `Save reviewed rows to goldset`.")
 
     with eval_tab:
-        st.subheader("Frozen eval set")
-        st.caption("Use this to check whether sendability thresholds still agree with your locked human-reviewed examples.")
-        summary, detail = evaluate_frozen_goldset()
-        if detail.empty:
-            st.info("No frozen eval set yet. Save reviewed rows to `frozen_eval_set` from the Review & Edit tab first.")
-            st.dataframe(summary, use_container_width=True, hide_index=True)
-        else:
-            metrics = {str(row["metric"]): row["value"] for _, row in summary.iterrows()}
-            e1, e2, e3, e4 = st.columns(4)
-            e1.metric("Frozen rows", metrics.get("frozen_eval_rows", 0))
-            e2.metric("Agreement", f"{metrics.get('exact_gate_human_agreement_pct', 0)}%")
-            e3.metric("Send precision", f"{metrics.get('send_precision_pct', 0)}%")
-            e4.metric("False sends", metrics.get("false_send_rows", 0))
-            st.markdown("**Eval summary**")
-            st.dataframe(summary, use_container_width=True, hide_index=True)
-            left, right = st.columns(2)
-            with left:
-                st.markdown("**Gate decisions**")
-                st.bar_chart(detail["gate_decision"].value_counts())
-            with right:
-                st.markdown("**Human decisions**")
-                st.bar_chart(detail["human_decision"].value_counts())
-            st.markdown("**Rows needing attention**")
-            attention = detail[(detail["agreement"] == "no") | (detail["false_send"] == "yes")]
-            st.dataframe(attention if not attention.empty else detail.head(0), use_container_width=True, height=280)
-            st.markdown("**Full eval details**")
-            st.dataframe(detail, use_container_width=True, height=360)
-            if st.button("Export frozen eval report", use_container_width=True):
-                report = export_frozen_eval_report()
-                st.session_state["eval_report_path"] = str(report)
-                st.success(f"Eval report created: {report}")
-            eval_report = st.session_state.get("eval_report_path")
-            if eval_report and Path(eval_report).exists():
-                st.download_button(
-                    "Download eval report",
-                    Path(eval_report).read_bytes(),
-                    Path(eval_report).name,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
+        render_eval_tab()
 
     with training_tab:
-        st.subheader("Client training pack")
-        st.caption("Give this to a client so they can label examples in plain English. Import it back to build a training/eval goldset.")
-        st.markdown(
-            """
-            <div class="ux-card">
-            <strong>How this works</strong>
-            <p class="ux-muted">
-            The client only chooses Send as is, Rewrite, or Reject. If they rewrite a line, that becomes the preferred example.
-            The original line becomes the non-preferred example. This is the cleanest way to collect future fine-tuning or preference data.
-            </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        source = st.radio("Template source", ["Current review rows", "Blank template"], horizontal=True)
-        template_df = st.session_state.get("review_df") if source == "Current review rows" else None
-        if source == "Current review rows" and template_df is None:
-            st.info("Run or load a batch first, or choose Blank template.")
-        else:
-            st.download_button(
-                "Download client training template",
-                training_template_bytes(template_df),
-                "client_training_feedback_template.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-
-        with st.expander("Message you can send to the client"):
-            st.code(
-                """I've attached a short feedback template.
-
-For each line, just choose:
-- Send as is
-- Rewrite
-- Reject
-
-If you choose Rewrite, please write the version you'd actually want to send.
-The most useful feedback is not a long explanation, but a few strong examples of what sounds right and what sounds wrong.
-
-I'll use the completed sheet to tune the workflow/model around your preferred tone and decision criteria.""",
-                language="text",
-            )
-
-        st.markdown("**Import completed client feedback**")
-        completed_feedback = st.file_uploader("Completed training template", type=["xlsx", "csv"], key="client_training_upload")
-        training_split = st.selectbox(
-            "Save imported feedback to",
-            GOLDSET_SPLITS,
-            index=GOLDSET_SPLITS.index("candidate_training_set") if "candidate_training_set" in GOLDSET_SPLITS else 0,
-            key="training_goldset_split",
-        )
-        if completed_feedback is not None:
-            try:
-                raw_feedback = read_training_feedback(completed_feedback)
-                normalized_feedback = normalize_training_feedback(raw_feedback)
-                st.markdown("**Preview normalized training rows**")
-                if normalized_feedback.empty:
-                    st.warning("No rows with a client_decision were found yet.")
-                else:
-                    st.dataframe(normalized_feedback, use_container_width=True, height=320)
-                if st.button("Import feedback into goldset", use_container_width=True):
-                    path, count, _ = append_training_feedback_to_goldset(completed_feedback, split=training_split)
-                    st.success(f"Imported {count} rows into {path}")
-            except Exception as exc:
-                st.error(f"Could not import client feedback: {exc}")
-
-        st.markdown("**Quick field guide**")
-        st.write(
-            "- `Send as is`: the client would send the line without changes.\n"
-            "- `Rewrite`: the idea might be usable, but the client wants different wording. The rewrite is the most valuable training signal.\n"
-            "- `Reject`: the line should not be used. Pick the closest reason so the system can learn what failed.\n"
-            "- `Surface to focus on`: where the observation should come from, such as app onboarding, App Store reviews, booking flow, or landing page."
-        )
+        render_training_tab()
 
     with calibration_tab:
         _tone_calibration_panel()

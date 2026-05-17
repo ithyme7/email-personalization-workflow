@@ -147,6 +147,16 @@ Die package bevat niet:
 - interne auditdetails
 - lokale bestandspaden zoals `C:\Users\...`
 
+De package maakt ook een `manifest.json` en scant tekstvelden op lokale paden, API-key-achtige waarden, tokenized URL's, e-mails en telefoonnummers. Screenshots worden alleen meegenomen als ze door de privacy-scan komen.
+
+Standaard staat `REQUIRE_SCREENSHOT_OCR=true`. Dat betekent: als lokale OCR niet klaarstaat, worden screenshots overgeslagen in de client-safe package in plaats van blind meegestuurd. Check dit met:
+
+```bash
+python tools/check_ocr.py
+```
+
+Gebruik `REQUIRE_SCREENSHOT_OCR=false` alleen voor lokale/interne debugging, niet voor klantlevering.
+
 ## Google Sheets
 
 Publieke Google Sheets kunnen meestal direct via de URL worden gelezen.

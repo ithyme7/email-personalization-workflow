@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from cli import run
+from batch_runner import run
 from config import load_settings
 from tone_profiles import available_tone_profiles
 

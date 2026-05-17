@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -18,6 +19,7 @@ TRAINING_COLUMNS = [
     "role",
     "website",
     "current_line",
+    "opening_line",
     "client_decision",
     "client_rewrite",
     "main_reason",
@@ -78,6 +80,11 @@ DECISION_TO_HUMAN = {
 
 INSTRUCTIONS = [
     {
+        "field": "opening_line",
+        "what_it_means": "The actual opener the model wrote.",
+        "how_to_fill": "Usually leave this as-is. Rewrite in client_rewrite instead so the original stays available for training.",
+    },
+    {
         "field": "client_decision",
         "what_it_means": "Choose Send as is, Rewrite, or Reject.",
         "how_to_fill": "Use Send as is only if you would actually send the line to a prospect.",
@@ -121,6 +128,7 @@ EXAMPLE_ROWS = [
         "role": "Founder",
         "website": "https://solo60.com",
         "current_line": "I was checking the website and noticed the location dropdown is not clearly clickable.",
+        "opening_line": "I was checking the website and noticed the location dropdown is not clearly clickable.",
         "client_decision": "Rewrite",
         "client_rewrite": "I downloaded the solo60 app and noticed the booking flow takes a few taps before you see available slots, which could cost bookings from users looking to train today.",
         "main_reason": "Wrong surface",
@@ -135,6 +143,7 @@ EXAMPLE_ROWS = [
         "role": "Founder",
         "website": "https://tryhero.app",
         "current_line": "The product is powerful but there is a lot introduced at once.",
+        "opening_line": "The product is powerful but there is a lot introduced at once.",
         "client_decision": "Reject",
         "client_rewrite": "",
         "main_reason": "Too generic",
@@ -155,6 +164,7 @@ def review_df_to_training_df(df: pd.DataFrame) -> pd.DataFrame:
     out["role"] = df.get("role", "")
     out["website"] = df.get("website", "")
     out["current_line"] = df.get("template_preview", df.get("personalized_line", ""))
+    out["opening_line"] = df.get("personalized_line", df.get("opening_line", ""))
     out["client_decision"] = ""
     out["client_rewrite"] = ""
     out["main_reason"] = ""
@@ -195,6 +205,7 @@ def _style_training_workbook(buffer: BytesIO) -> bytes:
         "role": 22,
         "website": 32,
         "current_line": 74,
+        "opening_line": 74,
         "client_decision": 18,
         "client_rewrite": 80,
         "main_reason": 24,
@@ -293,7 +304,11 @@ def normalize_training_feedback(df: pd.DataFrame) -> pd.DataFrame:
     out["person"] = normalized["person"]
     out["role"] = normalized["role"]
     out["website"] = normalized["website"]
-    out["personalized_line"] = normalized["current_line"]
+    source_line = normalized["opening_line"].where(normalized["opening_line"].astype(str).str.strip().ne(""), normalized["current_line"])
+    out["personalized_line"] = source_line
+    out["model_opening_line"] = source_line
+    out["current_opening_line"] = source_line
+    out["template_preview"] = normalized["current_line"]
     out["human_decision"] = normalized["client_decision"].str.lower().map(DECISION_TO_HUMAN).fillna("unreviewed")
     out["edited_line"] = normalized["client_rewrite"]
     out["edit_reason_category"] = normalized["main_reason"].str.lower().map(REASON_TO_CATEGORY).fillna("other")
@@ -316,10 +331,17 @@ def normalize_training_feedback(df: pd.DataFrame) -> pd.DataFrame:
     out["quality_flags"] = ""
     out["needs_manual_review"] = "no"
     out["visual_confidence"] = ""
+    out["source_kind"] = "client_feedback"
+    out["label_source"] = "client"
+    out["origin_run_id"] = ""
+    out["origin_row_id"] = ""
+    out["imported_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return out.fillna("")
 
 
 def append_training_feedback_to_goldset(uploaded_or_path: Any, split: str = "candidate_training_set") -> tuple[Path, int, pd.DataFrame]:
+    if split == "frozen_eval_set":
+        raise ValueError("Client feedback imports cannot be saved directly to frozen_eval_set. Import to reviewed_examples or candidate_training_set first, then promote examples intentionally.")
     raw = read_training_feedback(uploaded_or_path)
     normalized = normalize_training_feedback(raw)
     path, count = append_goldset_feedback(normalized, split=split)

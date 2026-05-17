@@ -18,6 +18,12 @@ from sendability import evaluate_sendability
 
 
 CLIENT_REVIEW_COLUMNS = [
+    "row_id",
+    "run_id",
+    "example_id",
+    "model_opening_line",
+    "current_opening_line",
+    "final_delivery_line",
     "status",
     "sendability_decision",
     "sendability_score",
@@ -241,6 +247,12 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
             personalized_line = "[research only, AI writing not available]"
         status = _status_for(row, personalized_line)
         review_row = {
+            "row_id": row.get("row_id", str(len(review_rows) + 1)),
+            "run_id": row.get("run_id", ""),
+            "example_id": row.get("example_id", ""),
+            "model_opening_line": personalized_line,
+            "current_opening_line": personalized_line,
+            "final_delivery_line": personalized_line,
             "status": status,
             "company": row.get("company_name", ""),
             "person": row.get("recipient_name", ""),

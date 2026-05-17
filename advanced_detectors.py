@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -13,11 +14,12 @@ from urllib.parse import urljoin
 
 import requests
 
-from config import DATA_DIR, SCREENSHOT_DIR, Settings
+from config import DATA_DIR, RESOURCE_DIR, SCREENSHOT_DIR, Settings
 
 
 TRACE_DIR = DATA_DIR / "traces"
 LIGHTHOUSE_DIR = DATA_DIR / "lighthouse"
+AXE_CORE_PATH = RESOURCE_DIR / "vendor" / "axe.min.js"
 
 
 @dataclass
@@ -88,6 +90,7 @@ def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> A
         ("desktop_full", {"width": 1440, "height": 1200, "is_mobile": False}),
         ("mobile_full", {"width": 390, "height": 844, "is_mobile": True}),
     ]
+    trace_mode = os.getenv("PLAYWRIGHT_TRACES", "flagged").strip().lower()
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -98,9 +101,13 @@ def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> A
                     device_scale_factor=2 if viewport["is_mobile"] else 1,
                 )
                 trace_path = _asset_path(TRACE_DIR, url, label, "zip", company_name)
-                context.tracing.start(screenshots=True, snapshots=True, sources=True)
+                collect_trace = trace_mode not in {"0", "false", "no", "off", "disabled", "none"}
+                if collect_trace:
+                    context.tracing.start(screenshots=True, snapshots=True, sources=True)
                 page = context.new_page()
                 failed_responses: list[str] = []
+                flag_count_before = len(result.flags)
+                had_playwright_error = False
                 page.on(
                     "response",
                     lambda response: failed_responses.append(f"{response.status} {response.url}")
@@ -123,11 +130,22 @@ def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> A
                         result.findings.append(f"{label}: {len(failed_responses[:8])} failed network response(s) detected.")
                         result.dead_link_checks.extend(failed_responses[:8])
                 except (PlaywrightTimeoutError, PlaywrightError) as exc:
+                    had_playwright_error = True
                     result.flags.append("playwright_check_failed")
                     result.reviewer_notes.append(f"Playwright check failed for {label}: {exc}")
                 finally:
-                    context.tracing.stop(path=str(trace_path))
-                    result.trace_files.append(str(trace_path.resolve()))
+                    if collect_trace:
+                        context.tracing.stop(path=str(trace_path))
+                        new_flagged_evidence = (
+                            had_playwright_error
+                            or bool(failed_responses)
+                            or len(result.flags) > flag_count_before
+                        )
+                        keep_trace = trace_mode in {"1", "true", "yes", "on", "always"} or new_flagged_evidence
+                        if keep_trace:
+                            result.trace_files.append(str(trace_path.resolve()))
+                        else:
+                            trace_path.unlink(missing_ok=True)
                     context.close()
             browser.close()
     except Exception as exc:
@@ -140,7 +158,10 @@ def _run_axe_core_checks(page, label: str) -> tuple[list[str], list[str]]:
     flags: list[str] = []
     findings: list[str] = []
     try:
-        page.add_script_tag(url="https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js")
+        if AXE_CORE_PATH.exists():
+            page.add_script_tag(path=str(AXE_CORE_PATH))
+        else:
+            page.add_script_tag(url="https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js")
         results = page.evaluate(
             r"""
 async () => {

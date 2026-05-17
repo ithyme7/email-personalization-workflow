@@ -7,7 +7,7 @@ The tool is designed around evidence first, copy second:
 1. Import and validate a lead CSV.
 2. Deduplicate company rows when requested.
 3. Research public website pages.
-4. Fall back to browser rendering for JavaScript-heavy pages.
+4. Fall back to Playwright browser rendering for JavaScript-heavy pages.
 5. Collect public app-store/listing signals when available.
 6. Run visual checks on desktop and mobile screenshots.
 7. Extract structured evidence.
@@ -24,14 +24,14 @@ The workflow is intentionally conservative: weak evidence should become a review
 - CSV input validation.
 - URL normalization and duplicate handling.
 - Public website research with `requests` and `BeautifulSoup`.
-- Optional Selenium browser fallback for JavaScript-heavy pages.
+- Optional Playwright browser fallback for JavaScript-heavy pages.
 - Desktop and mobile screenshot-based visual review.
 - App-first routing: when a mobile app is detected, app/onboarding evidence is prioritized over blog or generic website observations.
 - Product-surface classification for app-first products, website-first leadgen, B2B services, commerce pages, and marketplace/booking flows.
-- Optional Playwright checks for full-page desktop/mobile screenshots, trace files, visible CTA checks, and dead-link candidates.
+- Optional Playwright checks for full-page desktop/mobile screenshots, selective trace files, visible CTA checks, and dead-link candidates.
 - Optional Lighthouse checks for mobile quality signals when enabled.
-- axe-core accessibility checks through the browser context for high-confidence accessibility/CTA issues.
-- Shareable screenshot/trace assets copied next to the workbook and zipped into a delivery package.
+- Local axe-core accessibility checks through the browser context for high-confidence accessibility/CTA issues.
+- Shareable screenshot assets copied next to the workbook and zipped into a delivery package. Raw traces stay internal.
 - Evidence-first prompt chain.
 - Friction-prioritized angle selection.
 - Strict no-em-dash and genericness checks.
@@ -53,9 +53,13 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Viewport scope and evidence scope for visual/UX claims.
 - Human edit/goldset workflow with reviewed examples, frozen eval examples, and candidate training examples.
 - Frozen eval runner for measuring gate/human agreement on locked examples.
+- Release-gate CLI for enforcing eval thresholds before treating a version as production-ready.
+- Judge bakeoff CLI for comparing judge models against a goldset when an API key is available.
 - Client training template so non-technical clients can mark Send as is, Rewrite, or Reject.
 - Client delivery export with a smaller column set for handoff.
-- Client-safe delivery package that excludes raw traces, internal detector output, and local paths.
+- Schema-first row provenance using Pydantic-backed canonical rows.
+- Central taxonomy for quality flags, friction types, outcome terms, and surface terms.
+- Client-safe delivery package with manifest, screenshot privacy scan hooks, and stricter redaction/blocking for sensitive values.
 
 ## Public Safety Notes
 
@@ -95,6 +99,34 @@ MODEL_NAME=openai/gpt-4o-mini
 ```
 
 If no API key is set, the tool still validates input and exports research/review output, but it will not generate new AI-written lines.
+
+## Screenshot OCR Privacy Check
+
+Client-safe screenshot delivery is strict by default. `REQUIRE_SCREENSHOT_OCR=true` means screenshots are only included when OCR can scan them for PII.
+
+Install the Python OCR packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+On Windows, install the Tesseract OCR engine:
+
+```bash
+winget install UB-Mannheim.TesseractOCR
+```
+
+Then verify:
+
+```bash
+python tools/check_ocr.py
+```
+
+If Tesseract is installed in a custom location, set this in `.env`:
+
+```env
+TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
+```
 
 ## CSV Format
 
@@ -210,14 +242,14 @@ The Excel workbook includes:
 - `Research Details`: longer evidence, screenshots, source URLs, visual observations, internal UX validator findings, angle-gate notes, tone profile, and model metadata.
 - `Summary`: basic counts and usage notes.
 
-When screenshots or traces are created, the exporter also creates:
+When screenshots are created, the exporter also creates:
 
 - `<output_name>_assets/`
 - `<output_name>_delivery_package.zip`
 
 Use the zip when sharing visual evidence with someone else, because local paths such as `C:\Users\...` are only useful on the machine that generated the run.
 
-For external delivery, prefer the client-safe package from the web app. It includes a cleaned CSV/XLSX and selected screenshots only. It excludes trace files, raw detector output, internal audit details, and local filesystem paths.
+For external delivery, prefer the client-safe package from the web app. It includes a cleaned CSV/XLSX, a `manifest.json`, and selected screenshots only. It excludes trace files, raw detector output, internal audit details, and local filesystem paths. Text fields are redacted for local paths, API-key-like values, tokenized URL parameters, email addresses, and phone numbers. Screenshots are scanned for PII with OCR before inclusion. If OCR is not ready and `REQUIRE_SCREENSHOT_OCR=true`, screenshots are skipped rather than included blindly.
 
 ## Frozen Eval Runner
 
@@ -237,6 +269,24 @@ The eval report measures:
 - average evidence and template-fit scores
 
 Use this before changing prompts, thresholds, model choice, or tone profiles.
+
+To enforce the release gate locally:
+
+```bash
+python eval_runner.py --enforce-gate --fail-on-regression
+```
+
+To intentionally write the current frozen-set metrics as the baseline:
+
+```bash
+python eval_runner.py --write-baseline
+```
+
+To compare judge models against the same goldset:
+
+```bash
+python judge_bakeoff.py --models "gemini-3.1-flash-lite,gemini-2.5-flash"
+```
 
 ## Client Training Template
 

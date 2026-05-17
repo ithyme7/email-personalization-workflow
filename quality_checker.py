@@ -3,6 +3,7 @@ from __future__ import annotations
 from llm_client import LLMClient, LLMError, load_prompt
 from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ToneProfile
 from evidence_extractor import evidence_to_payload
+from taxonomy import ABSTRACT_PHRASES, BANNED_FILLER_WORDS, OUTCOME_TERMS, TECHNICAL_AUDIT_TERMS
 
 
 def _local_flags(draft: PersonalizationDraft, evidence: EvidenceResult | None = None) -> list[str]:
@@ -12,8 +13,7 @@ def _local_flags(draft: PersonalizationDraft, evidence: EvidenceResult | None = 
     flags: list[str] = []
     if "—" in text:
         flags.append("em_dash")
-    banned_filler = ["powerful", "impressive", "interesting", "innovative"]
-    if any(word in text_lower for word in banned_filler):
+    if any(word in text_lower for word in BANNED_FILLER_WORDS):
         flags.append("generic_praise")
     if "blog" in line_lower or "article" in line_lower:
         flags.append("blog_angle_low_value")
@@ -30,33 +30,10 @@ def _local_flags(draft: PersonalizationDraft, evidence: EvidenceResult | None = 
         or line_lower.startswith("i had a look ")
     ):
         flags.append("missing_conversational_template_open")
-    outcome_words = [
-        "drop off",
-        "drop-off",
-        "churn",
-        "activation",
-        "conversion",
-        "bookings",
-        "booking",
-        "signup",
-        "retention",
-        "paywall",
-        "bounce",
-        "first session",
-        "complete",
-    ]
+    outcome_words = OUTCOME_TERMS | {"complete"}
     if draft.opening_line and not any(word in line_lower for word in outcome_words):
         flags.append("missing_specific_dropoff_hypothesis")
-    abstract_phrases = [
-        "helps users",
-        "make it easier",
-        "find what they need",
-        "better experience",
-        "smooth",
-        "clearer journey",
-        "more seamless",
-    ]
-    if any(phrase in line_lower for phrase in abstract_phrases) and not any(
+    if any(phrase in line_lower for phrase in ABSTRACT_PHRASES) and not any(
         word in line_lower for word in ["costing", "hurting", "drop", "churn", "conversion", "signup", "booking"]
     ):
         flags.append("too_abstract")
@@ -92,17 +69,7 @@ def _local_flags(draft: PersonalizationDraft, evidence: EvidenceResult | None = 
         marker in line_lower for marker in friction_markers
     ):
         flags.append("missing_visible_friction")
-    technical_terms = [
-        "contrast ratio",
-        "tap target",
-        "horizontal overflow",
-        "wcag",
-        "axe-core",
-        "lighthouse",
-        "validator",
-        "accessibility violation",
-    ]
-    if any(term in line_lower for term in technical_terms):
+    if any(term in line_lower for term in TECHNICAL_AUDIT_TERMS):
         flags.append("technical_audit_language")
     if evidence:
         evidence_text = " ".join(

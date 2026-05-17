@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 import shutil
 import zipfile
@@ -9,6 +10,14 @@ from typing import Any
 import pandas as pd
 
 from config import OUTPUT_DIR
+from privacy_scan import (
+    HARD_CLIENT_SAFE_LEAKS,
+    SENSITIVE_VALUE_PATTERNS,
+    scan_image_for_pii,
+    scan_text,
+    sanitize_text,
+    screenshot_ocr_required,
+)
 from sendability import apply_sendability_to_dataframe
 
 
@@ -28,6 +37,8 @@ CLIENT_SAFE_COLUMNS = [
     "visual_reliability_score",
     "viewport_scope",
     "safe_screenshots",
+    "privacy_scan_flags",
+    "screenshot_privacy_notes",
     "client_safe_notes",
 ]
 
@@ -47,20 +58,41 @@ def _resolve_file(value: str, base_dir: Path | None = None) -> Path | None:
     return None
 
 
-def _copy_screenshots(row: pd.Series, screenshots_dir: Path, base_dir: Path | None = None) -> str:
+def _scan_safe_dataframe(df: pd.DataFrame) -> list[str]:
+    blob = "\n".join(df.astype(str).fillna("").agg(" ".join, axis=1).tolist())
+    return scan_text(blob)
+
+
+def _copy_screenshots(row: pd.Series, screenshots_dir: Path, base_dir: Path | None = None) -> tuple[str, list[str], list[str]]:
     copied: list[str] = []
+    flags: list[str] = []
+    notes: list[str] = []
     for column in ["shareable_screenshots", "screenshots"]:
         for item in _split_items(row.get(column, "")):
             source = _resolve_file(item, base_dir)
             if not source or source.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
                 continue
+            image_scan = scan_image_for_pii(source)
+            if image_scan.flags:
+                flags.extend([f"screenshot_{flag}" for flag in image_scan.flags])
+                notes.extend(image_scan.notes)
+                hard_image_flags = {"email_address", "phone_number", "api_key_like"}
+                if screenshot_ocr_required():
+                    hard_image_flags.update({"ocr_unavailable", "ocr_failed"})
+                if any(
+                    flag in HARD_CLIENT_SAFE_LEAKS
+                    or flag in hard_image_flags
+                    for flag in image_scan.flags
+                ):
+                    notes.append(f"Screenshot skipped because privacy scan flagged {source.name}.")
+                    continue
             screenshots_dir.mkdir(parents=True, exist_ok=True)
             safe_name = f"{str(row.get('company', 'company')).strip().replace(' ', '_')}_{source.name}"
             target = screenshots_dir / safe_name
             if not target.exists():
                 shutil.copy2(source, target)
             copied.append(str(Path("screenshots") / target.name))
-    return " | ".join(dict.fromkeys(copied))
+    return " | ".join(dict.fromkeys(copied)), sorted(set(flags)), list(dict.fromkeys(notes))
 
 
 def _delivery_filter(df: pd.DataFrame) -> pd.Series:
@@ -84,17 +116,34 @@ def client_safe_dataframe(df: pd.DataFrame, base_dir: Path | None = None, screen
         prepared.loc[use_edit, "personalized_line"] = prepared.loc[use_edit, "edited_line"]
 
     if screenshots_dir:
-        prepared["safe_screenshots"] = prepared.apply(lambda row: _copy_screenshots(row, screenshots_dir, base_dir), axis=1)
+        screenshot_results = prepared.apply(lambda row: _copy_screenshots(row, screenshots_dir, base_dir), axis=1)
+        prepared["safe_screenshots"] = screenshot_results.apply(lambda result: result[0])
+        prepared["privacy_scan_flags"] = screenshot_results.apply(lambda result: " | ".join(result[1]))
+        prepared["screenshot_privacy_notes"] = screenshot_results.apply(lambda result: " | ".join(result[2]))
     else:
         prepared["safe_screenshots"] = ""
+        prepared["privacy_scan_flags"] = ""
+        prepared["screenshot_privacy_notes"] = ""
 
     prepared["client_safe_notes"] = "Debug traces, raw detector output, local paths, and internal audit details excluded."
     for column in CLIENT_SAFE_COLUMNS:
         if column not in prepared:
             prepared[column] = ""
-    safe = prepared[CLIENT_SAFE_COLUMNS].copy()
-    for column in safe.columns:
-        safe[column] = safe[column].astype(str).str.replace(r"C:\\Users\\[^|;\n]+", "[local path removed]", regex=True)
+    safe = prepared[CLIENT_SAFE_COLUMNS].copy().fillna("").astype(str)
+    for idx, row in safe.iterrows():
+        row_flags: list[str] = []
+        for column in safe.columns:
+            if column == "privacy_scan_flags":
+                continue
+            scan_result = sanitize_text(row[column])
+            safe.at[idx, column] = scan_result.sanitized_text
+            row_flags.extend(scan_result.flags)
+        existing_flags = str(safe.at[idx, "privacy_scan_flags"] or "").split("|")
+        row_flags.extend([flag.strip() for flag in existing_flags if flag.strip()])
+        if row_flags:
+            unique_flags = " | ".join(sorted(set(row_flags)))
+            safe.at[idx, "privacy_scan_flags"] = unique_flags
+            safe.at[idx, "client_safe_notes"] = f"{safe.at[idx, 'client_safe_notes']} Potential sensitive values were redacted: {unique_flags}."
     return safe
 
 
@@ -107,6 +156,10 @@ def create_client_safe_package(df: pd.DataFrame, output_dir: Path | None = None,
     package_root.mkdir(parents=True, exist_ok=True)
 
     safe_df = client_safe_dataframe(df, base_dir=base_dir, screenshots_dir=screenshots_dir)
+    remaining_flags = _scan_safe_dataframe(safe_df)
+    hard_leaks = [flag for flag in remaining_flags if flag in HARD_CLIENT_SAFE_LEAKS]
+    if hard_leaks:
+        raise ValueError(f"Client-safe package blocked because sensitive values remain after sanitizing: {', '.join(hard_leaks)}")
     csv_path = package_root / "client_safe_delivery.csv"
     xlsx_path = package_root / "client_safe_delivery.xlsx"
     safe_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
@@ -120,10 +173,34 @@ def create_client_safe_package(df: pd.DataFrame, output_dir: Path | None = None,
             for cell in row:
                 cell.alignment = cell.alignment.copy(wrap_text=True, vertical="top")
 
+    manifest = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "package_name": package_root.name,
+        "input_rows": int(len(df)),
+        "client_rows": int(len(safe_df)),
+        "filter_policy": "human-approved send/edit when available, otherwise sendability Send only",
+        "included_files": ["client_safe_delivery.csv", "client_safe_delivery.xlsx"],
+        "screenshots_included": int(len(list(screenshots_dir.glob("*"))) if screenshots_dir.exists() else 0),
+        "excluded_artifacts": [
+            "Playwright traces",
+            "raw detector output",
+            "local filesystem paths",
+            "internal audit details",
+            "raw cache files",
+        ],
+        "privacy_sanitizers": sorted(SENSITIVE_VALUE_PATTERNS.keys()) + ["secret_query_parameter"],
+        "screenshot_ocr_required": screenshot_ocr_required(),
+        "remaining_privacy_scan_flags": remaining_flags,
+        "status": "blocked" if hard_leaks else "client_safe",
+    }
+    manifest_path = package_root / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
     zip_path = output_dir / f"{name}_{stamp}.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.write(csv_path, csv_path.relative_to(package_root))
         archive.write(xlsx_path, xlsx_path.relative_to(package_root))
+        archive.write(manifest_path, manifest_path.relative_to(package_root))
         if screenshots_dir.exists():
             for file_path in screenshots_dir.rglob("*"):
                 if file_path.is_file():

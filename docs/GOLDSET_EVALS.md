@@ -22,6 +22,13 @@ For edited rows, fill in:
 - `edit_reason_category`
 - `edit_notes`
 
+The workflow keeps line provenance non-destructive:
+
+- `model_opening_line`: the original model line
+- `current_opening_line`: the currently visible/reviewed line
+- `edited_line`: the human rewrite
+- `final_delivery_line`: the line used for delivery after review
+
 This creates a pair:
 
 - `non_preferred_line`: the original weaker line.
@@ -79,6 +86,30 @@ This creates an Excel report under `data/output/evals/` with:
 
 Use this before changing prompts, thresholds, model choice, or client tone profiles.
 
+## Release Gate
+
+Run the gate before treating a new version as ready:
+
+```bash
+python eval_runner.py --enforce-gate --fail-on-regression
+```
+
+Create or refresh the current baseline intentionally:
+
+```bash
+python eval_runner.py --write-baseline
+```
+
+Default release thresholds:
+
+- send precision at least 90%
+- gate/human agreement at least 78%
+- false sends no higher than 0
+- surface correctness at least 85%
+- app-first surface correctness at least 90% when app-first rows exist
+
+Client feedback imports are saved to `reviewed_examples` or `candidate_training_set` first. Do not import client feedback directly into `frozen_eval_set`; promote examples deliberately after checking they are representative.
+
 ## Pairwise Judge Direction
 
 Do not ask a judge model vague questions like “is this good?”
@@ -91,3 +122,13 @@ Use pairwise or pass/fail prompts:
 - Does this line pass the hard-fail rubric?
 
 Only trust an automated judge after checking that it agrees with the frozen eval set.
+
+## Judge Bakeoffs
+
+When you have a useful frozen set and an API key, compare judge models against the same rows:
+
+```bash
+python judge_bakeoff.py --models "gemini-3.1-flash-lite,gemini-2.5-flash"
+```
+
+The output goes to `data/output/evals/` and reports judge/human agreement per model. Treat this as calibration evidence, not as permission to remove human review.

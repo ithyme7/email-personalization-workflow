@@ -48,6 +48,29 @@ For external handoff, use the web app's client-safe package. It keeps the client
 
 If a row has `privacy_flags`, review it before sharing any related assets.
 
+Client-safe packages now include a `manifest.json` with:
+
+- package timestamp
+- number of input and delivered rows
+- row filter policy
+- excluded artifact classes
+- privacy sanitizers used
+- remaining privacy scan flags
+
+Package creation is blocked if hard leaks remain after sanitizing, such as local filesystem paths, API-key-like values, signed/tokenized URL parameters, or trace ZIP references.
+
+Screenshots are privacy-scanned before inclusion. By default `REQUIRE_SCREENSHOT_OCR=true`, so screenshot text must be scanned for emails, phone numbers, key-like strings, local paths, and tokenized URLs before a screenshot can be included.
+
+If OCR is unavailable while `REQUIRE_SCREENSHOT_OCR=true`, screenshots are skipped rather than included blindly, and the reason is recorded in `screenshot_privacy_notes`. To verify local OCR support, run:
+
+```bash
+python tools/check_ocr.py
+```
+
+Only set `REQUIRE_SCREENSHOT_OCR=false` for local/internal debugging where screenshots will not be shared externally.
+
+Playwright traces are internal debugging artifacts. By default, traces are only retained for flagged/failing browser checks. Set `PLAYWRIGHT_TRACES=always` only when debugging locally.
+
 ## Retention
 
 Recommended default:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -9,6 +11,14 @@ import pandas as pd
 from config import DATA_DIR, OUTPUT_DIR
 from sendability import apply_sendability_to_dataframe, goldset_path
 
+DEFAULT_BASELINE_PATH = DATA_DIR / "goldset" / "frozen_eval_baseline.json"
+DEFAULT_THRESHOLDS = {
+    "min_send_precision": 90.0,
+    "min_exact_agreement": 78.0,
+    "max_false_sends": 0,
+    "min_surface_correct_rate": 85.0,
+    "min_app_first_surface_correct_rate": 90.0,
+}
 
 EVAL_DETAIL_COLUMNS = [
     "company",
@@ -22,6 +32,7 @@ EVAL_DETAIL_COLUMNS = [
     "soft_edit_reasons",
     "surface_correctness",
     "surface_correctness_score",
+    "product_type",
     "evidence_score",
     "copy_quality_score",
     "outcome_alignment_score",
@@ -99,6 +110,12 @@ def evaluate_frozen_goldset(path: Path | None = None) -> tuple[pd.DataFrame, pd.
         if "surface_correctness" in scored
         else 0
     )
+    app_first = scored.get("product_type", scored.get("product_surface_type", pd.Series([""] * len(scored), index=scored.index))).fillna("").astype(str).str.lower().eq("app_first_product")
+    app_first_surface_correct_rate = (
+        round(scored.loc[app_first, "surface_correctness"].fillna("").eq("Correct").mean() * 100, 1)
+        if app_first.any() and "surface_correctness" in scored
+        else 0
+    )
 
     summary_records: list[dict[str, Any]] = [
         {"metric": "frozen_eval_rows", "value": len(scored)},
@@ -107,6 +124,7 @@ def evaluate_frozen_goldset(path: Path | None = None) -> tuple[pd.DataFrame, pd.
         {"metric": "reject_recall_pct", "value": reject_recall},
         {"metric": "false_send_rows", "value": int(false_send.sum())},
         {"metric": "surface_correct_rate_pct", "value": surface_correct_rate},
+        {"metric": "app_first_surface_correct_rate_pct", "value": app_first_surface_correct_rate},
         {"metric": "avg_evidence_score", "value": round(pd.to_numeric(scored["evidence_score"], errors="coerce").mean(), 1)},
         {"metric": "avg_template_fit_score", "value": round(pd.to_numeric(scored["template_fit_score"], errors="coerce").mean(), 1)},
     ]
@@ -126,10 +144,10 @@ def evaluate_frozen_goldset(path: Path | None = None) -> tuple[pd.DataFrame, pd.
     return pd.DataFrame(summary_records), detail[EVAL_DETAIL_COLUMNS]
 
 
-def export_frozen_eval_report(output_path: Path | None = None) -> Path:
+def export_frozen_eval_report(output_path: Path | None = None, goldset_path_arg: Path | None = None) -> Path:
     output_path = output_path or OUTPUT_DIR / "evals" / f"frozen_eval_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    summary, detail = evaluate_frozen_goldset()
+    summary, detail = evaluate_frozen_goldset(goldset_path_arg)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         summary.to_excel(writer, index=False, sheet_name="Summary")
         detail.to_excel(writer, index=False, sheet_name="Details")
@@ -148,9 +166,125 @@ def export_frozen_eval_report(output_path: Path | None = None) -> Path:
     return output_path
 
 
+def _summary_dict(summary: pd.DataFrame) -> dict[str, Any]:
+    return {str(row["metric"]): row["value"] for _, row in summary.iterrows()}
+
+
+def _float_metric(metrics: dict[str, Any], key: str, default: float = 0.0) -> float:
+    try:
+        return float(metrics.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_metric(metrics: dict[str, Any], key: str, default: int = 0) -> int:
+    try:
+        return int(float(metrics.get(key, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def write_baseline(path: Path | None = None, goldset_path_arg: Path | None = None) -> Path:
+    path = path or DEFAULT_BASELINE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    summary, _ = evaluate_frozen_goldset(goldset_path_arg)
+    payload = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "metrics": _summary_dict(summary),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def evaluate_release_gate(
+    summary: pd.DataFrame,
+    baseline_path: Path | None = None,
+    fail_on_regression: bool = False,
+    thresholds: dict[str, float] | None = None,
+) -> tuple[bool, list[str]]:
+    thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+    metrics = _summary_dict(summary)
+    failures: list[str] = []
+
+    if _int_metric(metrics, "frozen_eval_rows") == 0:
+        failures.append("No frozen eval rows available.")
+        return False, failures
+    if _float_metric(metrics, "send_precision_pct") < thresholds["min_send_precision"]:
+        failures.append(f"send_precision_pct below {thresholds['min_send_precision']}: {metrics.get('send_precision_pct')}")
+    if _float_metric(metrics, "exact_gate_human_agreement_pct") < thresholds["min_exact_agreement"]:
+        failures.append(f"exact_gate_human_agreement_pct below {thresholds['min_exact_agreement']}: {metrics.get('exact_gate_human_agreement_pct')}")
+    if _int_metric(metrics, "false_send_rows") > thresholds["max_false_sends"]:
+        failures.append(f"false_send_rows above {thresholds['max_false_sends']}: {metrics.get('false_send_rows')}")
+    if _float_metric(metrics, "surface_correct_rate_pct") < thresholds["min_surface_correct_rate"]:
+        failures.append(f"surface_correct_rate_pct below {thresholds['min_surface_correct_rate']}: {metrics.get('surface_correct_rate_pct')}")
+    app_first_rate = _float_metric(metrics, "app_first_surface_correct_rate_pct")
+    if app_first_rate and app_first_rate < thresholds["min_app_first_surface_correct_rate"]:
+        failures.append(
+            f"app_first_surface_correct_rate_pct below {thresholds['min_app_first_surface_correct_rate']}: {metrics.get('app_first_surface_correct_rate_pct')}"
+        )
+
+    baseline_path = baseline_path or DEFAULT_BASELINE_PATH
+    if fail_on_regression and baseline_path.exists():
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8")).get("metrics", {})
+        no_regression_metrics = [
+            "send_precision_pct",
+            "exact_gate_human_agreement_pct",
+            "reject_recall_pct",
+            "surface_correct_rate_pct",
+            "app_first_surface_correct_rate_pct",
+        ]
+        for metric in no_regression_metrics:
+            current = _float_metric(metrics, metric)
+            previous = _float_metric(baseline, metric)
+            if previous and current < previous:
+                failures.append(f"{metric} regressed from {previous} to {current}")
+        current_false_sends = _int_metric(metrics, "false_send_rows")
+        previous_false_sends = _int_metric(baseline, "false_send_rows")
+        if current_false_sends > previous_false_sends:
+            failures.append(f"false_send_rows regressed from {previous_false_sends} to {current_false_sends}")
+
+    return not failures, failures
+
+
 def main() -> None:
-    path = export_frozen_eval_report()
-    print(path)
+    parser = argparse.ArgumentParser(description="Run frozen evals and optionally enforce release-gate thresholds.")
+    parser.add_argument("--goldset", type=Path, default=None, help="Path to frozen_eval_set.csv")
+    parser.add_argument("--output", type=Path, default=None, help="Optional eval report XLSX path")
+    parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE_PATH, help="Baseline JSON path")
+    parser.add_argument("--write-baseline", action="store_true", help="Write current metrics as the baseline and exit")
+    parser.add_argument("--enforce-gate", action="store_true", help="Exit with code 1 when current metrics fail the release gate")
+    parser.add_argument("--fail-on-regression", action="store_true", help="Fail if metrics regress against the baseline JSON")
+    parser.add_argument("--min-send-precision", type=float, default=DEFAULT_THRESHOLDS["min_send_precision"])
+    parser.add_argument("--min-exact-agreement", type=float, default=DEFAULT_THRESHOLDS["min_exact_agreement"])
+    parser.add_argument("--max-false-sends", type=int, default=DEFAULT_THRESHOLDS["max_false_sends"])
+    parser.add_argument("--min-surface-correct-rate", type=float, default=DEFAULT_THRESHOLDS["min_surface_correct_rate"])
+    parser.add_argument("--min-app-first-surface-correct-rate", type=float, default=DEFAULT_THRESHOLDS["min_app_first_surface_correct_rate"])
+    args = parser.parse_args()
+
+    if args.write_baseline:
+        path = write_baseline(args.baseline, args.goldset)
+        print(f"Baseline written: {path}")
+        return
+
+    summary, _ = evaluate_frozen_goldset(args.goldset)
+    output_path = export_frozen_eval_report(args.output, args.goldset)
+    thresholds = {
+        "min_send_precision": args.min_send_precision,
+        "min_exact_agreement": args.min_exact_agreement,
+        "max_false_sends": args.max_false_sends,
+        "min_surface_correct_rate": args.min_surface_correct_rate,
+        "min_app_first_surface_correct_rate": args.min_app_first_surface_correct_rate,
+    }
+    passed, failures = evaluate_release_gate(summary, args.baseline, args.fail_on_regression, thresholds)
+    print(f"Eval report: {output_path}")
+    if passed:
+        print("Release gate: PASS")
+    else:
+        print("Release gate: FAIL" if (args.enforce_gate or args.fail_on_regression) else "Release gate: WARN")
+        for failure in failures:
+            print(f"- {failure}")
+        if args.enforce_gate or args.fail_on_regression:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
