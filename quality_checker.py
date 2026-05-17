@@ -3,6 +3,8 @@ from __future__ import annotations
 from llm_client import LLMClient, LLMError, load_prompt
 from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ToneProfile
 from evidence_extractor import evidence_to_payload
+from deliverability import deliverability_flags
+from grounding import grounding_flags
 from taxonomy import ABSTRACT_PHRASES, BANNED_FILLER_WORDS, OUTCOME_TERMS, TECHNICAL_AUDIT_TERMS
 
 
@@ -71,7 +73,9 @@ def _local_flags(draft: PersonalizationDraft, evidence: EvidenceResult | None = 
         flags.append("missing_visible_friction")
     if any(term in line_lower for term in TECHNICAL_AUDIT_TERMS):
         flags.append("technical_audit_language")
+    flags.extend(deliverability_flags(draft.opening_line))
     if evidence:
+        flags.extend(grounding_flags(draft, evidence))
         evidence_text = " ".join(
             f"{fact.fact} {fact.surface_checked} {fact.why_it_matters}" for fact in evidence.facts
         ).lower()

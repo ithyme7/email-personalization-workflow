@@ -45,6 +45,8 @@ Gebruik `Demo sample` in de input-keuze om de workflow tijdens een call te laten
 
 Elke run wordt lokaal opgeslagen in de history met datum, aantal rows, ready/review verdeling, model, tone profile, kosteninschatting en outputbestand. Vanuit de `History` tab kun je een eerdere workbook opnieuw laden of downloaden.
 
+De history gebruikt nu lokaal SQLite in plaats van alleen losse JSONL-regels. Dat maakt de app-state stabieler wanneer je vaker batches draait of de app opnieuw opent.
+
 ## Tone calibration
 
 In `Tone Calibration` kun je feedback van een klant plakken, goede en slechte voorbeelden toevoegen en daar een nieuw client-specific profile van maken. Dit profile verschijnt daarna in de tone dropdown.
@@ -170,6 +172,15 @@ Export naar Google Sheets werkt via dezelfde service-account methode.
 De sidebar bevat input/output prijsvelden per 1M tokens. De app gebruikt de gemeten API-calls en token-schattingen uit de run om een batchkosten-inschatting te tonen.
 
 Controleer provider pricing altijd voordat je marge of klantprijs bepaalt.
+
+Voor harde kostenbewaking kun je in `.env` instellen:
+
+```text
+MAX_BATCH_COST_USD=0
+MAX_LLM_CALLS_PER_BATCH=0
+```
+
+`0` betekent uitgeschakeld. Als je hier limieten invult, stopt de workflow vóór de volgende API-call zodra de batch daaroverheen dreigt te gaan.
 
 ## Belangrijk
 

@@ -110,6 +110,17 @@ Default release thresholds:
 
 Client feedback imports are saved to `reviewed_examples` or `candidate_training_set` first. Do not import client feedback directly into `frozen_eval_set`; promote examples deliberately after checking they are representative.
 
+## CI Fixture
+
+The repo includes a synthetic, non-client frozen eval fixture:
+
+```text
+tests/fixtures/frozen_eval_set.csv
+tests/fixtures/goldset_manifest.json
+```
+
+GitHub Actions verifies the manifest checksum and runs `eval_runner.py --enforce-gate` against that fixture on every push and pull request. This does not replace a real client-specific frozen eval set, but it catches deterministic regressions in sendability logic without exposing private lead data.
+
 ## Pairwise Judge Direction
 
 Do not ask a judge model vague questions like “is this good?”

@@ -25,6 +25,7 @@ data/goldset/*
 *.xls
 *.csv
 !data/input/sample_companies.csv
+!tests/fixtures/*.csv
 *.zip
 *.exe
 .DS_Store

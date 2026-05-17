@@ -45,6 +45,8 @@ class Settings:
     advanced_detectors: str
     lighthouse_review: str
     tone_profile: str
+    max_batch_cost_usd: float
+    max_llm_calls_per_batch: int
 
     @property
     def has_openai_key(self) -> bool:
@@ -115,6 +117,8 @@ def load_settings() -> Settings:
         advanced_detectors=os.getenv("ADVANCED_DETECTORS", "auto").strip().lower(),
         lighthouse_review=os.getenv("LIGHTHOUSE_REVIEW", "off").strip().lower(),
         tone_profile=os.getenv("TONE_PROFILE", "friction_first").strip() or "friction_first",
+        max_batch_cost_usd=max(0.0, _float_env("MAX_BATCH_COST_USD", 0.0)),
+        max_llm_calls_per_batch=max(0, _int_env("MAX_LLM_CALLS_PER_BATCH", 0)),
     )
 
 

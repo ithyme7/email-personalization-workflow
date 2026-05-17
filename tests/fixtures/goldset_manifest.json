@@ -1,0 +1,12 @@
+{
+  "name": "synthetic_frozen_eval_fixture",
+  "version": 1,
+  "description": "Synthetic, non-client fixture used by CI to verify the deterministic sendability release gate.",
+  "files": [
+    {
+      "path": "frozen_eval_set.csv",
+      "sha256": "e5880e3a71e38ddb45d5ccc8617da679663c595b604592f61a17c5b5485356b1",
+      "rows": 3
+    }
+  ]
+}

@@ -44,6 +44,7 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Accurate row-level progress bar in the web app.
 - Optional Google Sheets input and Google Sheets export.
 - Batch cost estimate using editable model-price assumptions.
+- Optional LLM cost/call circuit breaker with `MAX_BATCH_COST_USD` and `MAX_LLM_CALLS_PER_BATCH`.
 - Optional client-specific tone profiles saved locally.
 - One-click Windows launcher for the web app.
 - Demo sample mode for low-risk walkthroughs during calls.
@@ -55,11 +56,13 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Frozen eval runner for measuring gate/human agreement on locked examples.
 - Release-gate CLI for enforcing eval thresholds before treating a version as production-ready.
 - Judge bakeoff CLI for comparing judge models against a goldset when an API key is available.
+- CI checks with a synthetic frozen-eval fixture, manifest checksum, privacy tests, and guardrail tests.
 - Client training template so non-technical clients can mark Send as is, Rewrite, or Reject.
 - Client delivery export with a smaller column set for handoff.
 - Schema-first row provenance using Pydantic-backed canonical rows.
 - Central taxonomy for quality flags, friction types, outcome terms, and surface terms.
 - Client-safe delivery package with manifest, screenshot privacy scan hooks, and stricter redaction/blocking for sensitive values.
+- SQLite-backed run history for more robust local app state.
 
 ## Public Safety Notes
 
@@ -99,6 +102,15 @@ MODEL_NAME=openai/gpt-4o-mini
 ```
 
 If no API key is set, the tool still validates input and exports research/review output, but it will not generate new AI-written lines.
+
+Optional budget guardrails:
+
+```env
+MAX_BATCH_COST_USD=0
+MAX_LLM_CALLS_PER_BATCH=0
+```
+
+`0` means disabled. Set these for paid batches when you want the workflow to stop before an unexpected model-cost spike.
 
 ## Screenshot OCR Privacy Check
 
@@ -276,6 +288,13 @@ To enforce the release gate locally:
 python eval_runner.py --enforce-gate --fail-on-regression
 ```
 
+The GitHub Actions workflow also runs a synthetic non-client frozen eval fixture:
+
+```bash
+python tools/check_goldset_manifest.py --manifest tests/fixtures/goldset_manifest.json
+python eval_runner.py --goldset tests/fixtures/frozen_eval_set.csv --enforce-gate
+```
+
 To intentionally write the current frozen-set metrics as the baseline:
 
 ```bash
@@ -341,6 +360,12 @@ The gate is multidimensional:
 - `viewport_scope`: whether a visual claim is backed by mobile, desktop, both, or unknown viewport evidence.
 - `evidence_scope`: whether the row has source URLs, screenshots, both, or thin evidence.
 - `privacy_flags`: internal markers such as trace files or local paths that should not go into client handoff.
+
+Additional local guardrails now run before or alongside model QC:
+
+- grounding checks flag lines that are not lexically traceable to extracted evidence
+- deliverability checks flag spam-trigger wording and accidental HTML
+- budget checks stop API usage before a configured cost/call limit is exceeded
 
 In the web app, use `human_decision`, `edited_line`, `edit_reason_category`, and `edit_notes` in the Review tab. Click `Save reviewed rows to goldset` to append reviewed examples to one of three local splits:
 

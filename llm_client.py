@@ -10,9 +10,14 @@ from typing import Any
 import requests
 
 from config import PROMPTS_DIR, Settings
+from cost_estimator import price_for_model
 
 
 class LLMError(RuntimeError):
+    pass
+
+
+class LLMBudgetExceeded(LLMError):
     pass
 
 
@@ -103,6 +108,28 @@ class LLMClient:
         self.call_count += 1
         self.estimated_input_tokens += self._estimate_tokens(system_prompt) + self._estimate_tokens(user_payload)
         self.estimated_output_tokens += self._estimate_tokens(response_text)
+
+    def _projected_cost_usd(self, next_input_tokens: int = 0, next_output_tokens: int = 1200) -> float:
+        input_price, output_price = price_for_model(self.settings.model_name)
+        input_tokens = self.estimated_input_tokens + next_input_tokens
+        output_tokens = self.estimated_output_tokens + next_output_tokens
+        return (input_tokens / 1_000_000 * input_price) + (output_tokens / 1_000_000 * output_price)
+
+    def _enforce_budget(self, system_prompt: str, user_payload: dict[str, Any]) -> None:
+        max_calls = self.settings.max_llm_calls_per_batch
+        if max_calls and self.call_count + 1 > max_calls:
+            raise LLMBudgetExceeded(
+                f"LLM call limit reached: {self.call_count + 1} would exceed MAX_LLM_CALLS_PER_BATCH={max_calls}"
+            )
+
+        max_cost = self.settings.max_batch_cost_usd
+        if max_cost:
+            next_input_tokens = self._estimate_tokens(system_prompt) + self._estimate_tokens(user_payload)
+            projected = self._projected_cost_usd(next_input_tokens=next_input_tokens)
+            if projected > max_cost:
+                raise LLMBudgetExceeded(
+                    f"LLM budget limit reached: projected ${projected:.4f} would exceed MAX_BATCH_COST_USD=${max_cost:.4f}"
+                )
 
     def usage_summary(self) -> dict[str, int]:
         return {
@@ -203,6 +230,8 @@ class LLMClient:
             if self.settings.llm_provider == "deepseek":
                 raise LLMError("DEEPSEEK_API_KEY is missing")
             raise LLMError("OPENAI_API_KEY is missing")
+
+        self._enforce_budget(system_prompt, user_payload)
 
         if self.settings.llm_provider == "gemini":
             return self._complete_json_gemini(system_prompt, user_payload)

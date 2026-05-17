@@ -9,6 +9,7 @@ SEVERE_QUALITY_FLAGS = {
     "hallucination",
     "em_dash",
     "invalid_json",
+    "html_in_personalization_line",
 }
 
 EDIT_QUALITY_FLAGS = {
@@ -22,6 +23,10 @@ EDIT_QUALITY_FLAGS = {
     "wrong_surface",
     "low_confidence_visual_finding",
     "thin_content",
+    "line_not_grounded_in_evidence",
+    "evidence_used_not_in_extracted_facts",
+    "missing_grounding_evidence",
+    "spam_trigger_language",
 }
 
 PRIORITY_FRICTION_TYPES = {
@@ -306,4 +311,3 @@ TECHNICAL_AUDIT_TERMS = {
     "validator",
     "accessibility violation",
 }
-

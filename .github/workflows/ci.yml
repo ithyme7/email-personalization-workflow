@@ -18,8 +18,19 @@ jobs:
           pip install -r requirements.txt
       - name: Compile modules
         run: |
-          python -m py_compile *.py
-      - name: Run eval report smoke check
+          python -m py_compile *.py tests/*.py tools/*.py
+      - name: Verify frozen eval fixture manifest
         run: |
-          python eval_runner.py --output data/output/evals/ci_smoke_eval_report.xlsx
-
+          python tools/check_goldset_manifest.py --manifest tests/fixtures/goldset_manifest.json
+      - name: Run deterministic frozen eval gate
+        run: |
+          python eval_runner.py --goldset tests/fixtures/frozen_eval_set.csv --output data/output/evals/ci_frozen_eval_report.xlsx --enforce-gate --min-send-precision 90 --min-exact-agreement 90 --max-false-sends 0 --min-surface-correct-rate 80 --min-app-first-surface-correct-rate 90
+      - name: Run privacy and sendability tests
+        run: |
+          python tests/test_privacy_and_sendability.py
+      - name: Run guardrail tests
+        run: |
+          python tests/test_guardrails.py
+      - name: Run run-history storage tests
+        run: |
+          python tests/test_run_history.py

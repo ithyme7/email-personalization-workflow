@@ -9,6 +9,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from config import DATA_DIR
+from deliverability import deliverability_flags
 from schemas import canonicalize_dataframe, canonicalize_row
 from taxonomy import (
     APP_SURFACE_TERMS,
@@ -324,6 +325,13 @@ def evaluate_copy_quality(row: Mapping[str, Any]) -> tuple[int, list[str], list[
     if "hallucination" in quality_flags:
         hard.append("hallucination")
         penalties.append(45)
+    delivery_flags = deliverability_flags(line)
+    if "html_in_personalization_line" in delivery_flags:
+        hard.append("html_in_personalization_line")
+        penalties.append(45)
+    if "spam_trigger_language" in delivery_flags:
+        soft.append("spam_trigger_language")
+        penalties.append(15)
     return _score_from_penalties(100, penalties), hard, soft
 
 
