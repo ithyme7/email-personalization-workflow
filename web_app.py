@@ -19,6 +19,7 @@ from batch_runner import run
 from config import DATA_DIR, OUTPUT_DIR, load_settings
 from cost_estimator import CostEstimate, estimate_batch_cost, price_for_model
 from export import CLIENT_REVIEW_COLUMNS, _client_rows
+from export_mappings import preset_names, sending_tool_dataframe
 from google_sheets import (
     GoogleSheetsError,
     dataframe_to_temp_csv,
@@ -27,6 +28,7 @@ from google_sheets import (
     read_public_sheet,
 )
 from run_history import append_run_history, load_run_history
+from preflight import has_blocking_failures, run_preflight
 from sendability import (
     EDIT_REASON_CATEGORIES,
     GOLDSET_SPLITS,
@@ -224,6 +226,11 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "tone_profile",
         "model_provider",
         "model_name",
+        "prompt_set_hash",
+        "evidence_prompt_hash",
+        "write_prompt_hash",
+        "qc_prompt_hash",
+        "tone_profile_hash",
     ]
     return df[[col for col in ordered if col in df.columns]]
 
@@ -273,6 +280,10 @@ def _batch_summary(df: pd.DataFrame, cost: CostEstimate | None, output_path: Pat
         "provider": provider,
         "model": model_name,
         "tone_profile": Path(tone_profile).stem if str(tone_profile).endswith(".json") else tone_profile,
+        "prompt_set_hash": str(df["prompt_set_hash"].iloc[0]) if "prompt_set_hash" in df and not df.empty else "",
+        "write_prompt_hash": str(df["write_prompt_hash"].iloc[0]) if "write_prompt_hash" in df and not df.empty else "",
+        "qc_prompt_hash": str(df["qc_prompt_hash"].iloc[0]) if "qc_prompt_hash" in df and not df.empty else "",
+        "tone_profile_hash": str(df["tone_profile_hash"].iloc[0]) if "tone_profile_hash" in df and not df.empty else "",
         "estimated_cost_usd": round(cost.estimated_cost_usd, 6) if cost else 0,
         "llm_calls": cost.llm_calls if cost else 0,
         "input_tokens": cost.input_tokens if cost else 0,
@@ -326,6 +337,9 @@ def _make_args(input_path: Path, output_path: Path, campaign_context: str, tone_
         deep_research=True,
         tone_profile=tone_profile,
         log_level="INFO",
+        skip_preflight=False,
+        sending_tool_preset="",
+        sending_tool_output="",
     )
 
 
@@ -385,6 +399,22 @@ def _sidebar_settings() -> tuple[str, str, str, float, float, bool, bool]:
         value=settings.lighthouse_review not in {"0", "false", "no", "off", "disabled"},
         help="Slower mobile quality audit. Use for deeper review, not every quick batch.",
     )
+    st.sidebar.header("Pre-flight")
+    if st.sidebar.button("Run system check", use_container_width=True):
+        _set_api_env(provider, api_key, model_name)
+        _set_detector_env(advanced_detectors, lighthouse_review)
+        checks = run_preflight(load_settings())
+        for check in checks:
+            if check.status == "ok":
+                st.sidebar.success(f"{check.name}: {check.message}")
+            elif check.status == "warn":
+                st.sidebar.warning(f"{check.name}: {check.message}")
+            else:
+                st.sidebar.error(f"{check.name}: {check.message}")
+        if has_blocking_failures(checks):
+            st.sidebar.error("Fix blocking pre-flight failures before a large batch.")
+        else:
+            st.sidebar.success("Pre-flight passed without blocking failures.")
     return provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review
 
 
@@ -1229,6 +1259,30 @@ def main() -> None:
                 "Download client delivery XLSX",
                 _df_to_xlsx_bytes(delivery_out),
                 "client_delivery_personalized_lines.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+            st.markdown("**Sending tool mapping**")
+            mapping_preset = st.selectbox(
+                "Native export format",
+                preset_names(),
+                index=preset_names().index("generic"),
+                help="Creates a CSV/XLSX with column names matching common sending tools, so manual mapping is reduced.",
+            )
+            mapped_delivery = sending_tool_dataframe(delivery, preset=mapping_preset)
+            m1, m2 = st.columns(2)
+            m1.download_button(
+                f"Download {mapping_preset} CSV",
+                mapped_delivery.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                f"{mapping_preset}_personalization_import.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+            m2.download_button(
+                f"Download {mapping_preset} XLSX",
+                _df_to_xlsx_bytes(mapped_delivery),
+                f"{mapping_preset}_personalization_import.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )

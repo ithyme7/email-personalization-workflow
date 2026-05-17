@@ -58,6 +58,89 @@ def append_run_history(record: dict[str, Any]) -> None:
         conn.close()
 
 
+def append_generated_email_rows(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS generated_emails (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                run_id TEXT,
+                row_id TEXT,
+                example_id TEXT,
+                company TEXT,
+                person TEXT,
+                website TEXT,
+                model_provider TEXT,
+                model_name TEXT,
+                tone_profile TEXT,
+                prompt_set_hash TEXT,
+                evidence_prompt_hash TEXT,
+                write_prompt_hash TEXT,
+                qc_prompt_hash TEXT,
+                tone_profile_hash TEXT,
+                personalized_line TEXT,
+                payload_json TEXT NOT NULL
+            )
+            """
+        )
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for row in rows:
+            payload = {key: _as_jsonable(value) for key, value in row.items()}
+            conn.execute(
+                """
+                INSERT INTO generated_emails (
+                    created_at, run_id, row_id, example_id, company, person, website,
+                    model_provider, model_name, tone_profile, prompt_set_hash,
+                    evidence_prompt_hash, write_prompt_hash, qc_prompt_hash, tone_profile_hash,
+                    personalized_line, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    created_at,
+                    str(row.get("run_id", "")),
+                    str(row.get("row_id", "")),
+                    str(row.get("example_id", "")),
+                    str(row.get("company_name") or row.get("company") or ""),
+                    str(row.get("recipient_name") or row.get("person") or ""),
+                    str(row.get("website_url") or row.get("website") or ""),
+                    str(row.get("model_provider", "")),
+                    str(row.get("model_name", "")),
+                    str(row.get("tone_profile", "")),
+                    str(row.get("prompt_set_hash", "")),
+                    str(row.get("evidence_prompt_hash", "")),
+                    str(row.get("write_prompt_hash", "")),
+                    str(row.get("qc_prompt_hash", "")),
+                    str(row.get("tone_profile_hash", "")),
+                    str(row.get("opening_line") or row.get("personalized_line") or ""),
+                    json.dumps(payload, ensure_ascii=False),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def sqlite_is_writable() -> tuple[bool, str]:
+    try:
+        conn = _connect()
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS preflight_probe (id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL)"
+            )
+            conn.execute("INSERT INTO preflight_probe (checked_at) VALUES (?)", (datetime.now().isoformat(),))
+            conn.execute("DELETE FROM preflight_probe")
+            conn.commit()
+        finally:
+            conn.close()
+        return True, f"Writable: {HISTORY_DB}"
+    except Exception as exc:
+        return False, f"SQLite is not writable: {exc}"
+
+
 def _load_jsonl_history(limit: int) -> pd.DataFrame:
     if not HISTORY_FILE.exists():
         return pd.DataFrame()

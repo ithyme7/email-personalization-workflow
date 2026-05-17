@@ -37,3 +37,6 @@ jobs:
       - name: Run campaign feedback tests
         run: |
           python tests/test_campaign_feedback.py
+      - name: Run preflight and export mapping tests
+        run: |
+          python tests/test_preflight_and_exports.py

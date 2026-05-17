@@ -48,6 +48,7 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Optional Google Sheets input and Google Sheets export.
 - Batch cost estimate using editable model-price assumptions.
 - Optional LLM cost/call circuit breaker with `MAX_BATCH_COST_USD` and `MAX_LLM_CALLS_PER_BATCH`.
+- Pre-flight system check for output folder, SQLite history, proxy config, API access, and screenshot OCR readiness.
 - Optional client-specific tone profiles saved locally.
 - One-click Windows launcher for the web app.
 - Demo sample mode for low-risk walkthroughs during calls.
@@ -63,10 +64,12 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Client training template so non-technical clients can mark Send as is, Rewrite, or Reject.
 - Post-send campaign-results import for opens, replies, positive replies, bookings, bounces, and notes.
 - Client delivery export with a smaller column set for handoff.
+- Native CSV/XLSX export mappings for Generic, Lemlist, Instantly, and Smartlead imports.
 - Schema-first row provenance using Pydantic-backed canonical rows.
 - Central taxonomy for quality flags, friction types, outcome terms, and surface terms.
 - Client-safe delivery package with manifest, screenshot privacy scan hooks, and stricter redaction/blocking for sensitive values.
 - SQLite-backed run history for more robust local app state.
+- Prompt and tone-profile hashes stored on generated rows and run history, so campaign results can be traced back to the exact prompt version.
 
 ## Public Safety Notes
 
@@ -106,6 +109,16 @@ MODEL_NAME=openai/gpt-4o-mini
 ```
 
 If no API key is set, the tool still validates input and exports research/review output, but it will not generate new AI-written lines.
+
+## Pre-flight Check
+
+Before a large batch, run:
+
+```bash
+python cli.py --input data/input/sample_companies.csv --output data/output/preflight.xlsx --preflight-only
+```
+
+This checks whether the output folder is writable, SQLite history can write, optional proxy settings work, the configured API key is reachable, and screenshot OCR is ready when required. Missing API keys are reported clearly; they do not stop research-only mode.
 
 Optional budget guardrails:
 
@@ -203,6 +216,7 @@ The web app supports:
 - Google Sheets input
 - campaign context input
 - provider/model/API-key settings
+- pre-flight system check button
 - 50 tone presets
 - optional client-specific custom prompt/profile creation
 - run batch button
@@ -222,6 +236,7 @@ The web app supports:
 - export full workbook
 - optional export to Google Sheets
 - simplified client delivery CSV/XLSX
+- native sending-tool exports for Generic, Lemlist, Instantly, and Smartlead
 - client-safe ZIP package for external handoff
 
 On Windows you can also double-click:
@@ -236,6 +251,12 @@ The launcher waits until Streamlit is ready, opens the browser, and uses the nex
 
 ```bash
 python cli.py --input path/to/leads.csv --output data/output/personalization_review.xlsx --campaign-context "Your campaign context here" --reuse-duplicate-personalization --client-batch-output --tone-profile friction_first
+```
+
+Optional sending-tool export:
+
+```bash
+python cli.py --input path/to/leads.csv --output data/output/personalization_review.xlsx --campaign-context "Your campaign context here" --reuse-duplicate-personalization --client-batch-output --tone-profile friction_first --sending-tool-preset lemlist --sending-tool-output data/output/lemlist_import.csv
 ```
 
 ## Tone Profiles
@@ -269,6 +290,16 @@ The Excel workbook includes:
 - `Review`: the main working tab with sendability decision, hard/soft reasons, surface correctness, personalized line, template preview, evidence, shareable screenshots, flags, and manual-review notes.
 - `Research Details`: longer evidence, screenshots, source URLs, visual observations, internal UX validator findings, angle-gate notes, tone profile, and model metadata.
 - `Summary`: basic counts and usage notes.
+
+Rows also include prompt provenance:
+
+- `prompt_set_hash`
+- `evidence_prompt_hash`
+- `write_prompt_hash`
+- `qc_prompt_hash`
+- `tone_profile_hash`
+
+These hashes make it possible to compare campaign outcomes against the exact prompt/profile version that generated each line.
 
 When screenshots are created, the exporter also creates:
 

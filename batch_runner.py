@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -10,12 +11,16 @@ from angle_selector import evidence_for_selected_angle, select_angle
 from config import ensure_directories, load_settings
 from deep_research import collect_deep_research
 from evidence_extractor import evidence_to_payload, extract_evidence
-from export import export_client_batch_rows, export_rows
+from export import export_client_batch_rows, export_rows, export_sending_tool_rows
 from input_loader import dedupe_key, load_leads
 from llm_client import LLMClient
 from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
 from personalization_writer import write_personalization
+from preflight import has_blocking_failures, preflight_summary, run_preflight
+from prompt_versions import prompt_hashes, tone_profile_hash
 from quality_checker import check_quality
+from run_history import append_generated_email_rows
+from schemas import stable_hash
 from surface_classifier import classify_surface, is_app_first, research_priority_for
 from tone_profiles import load_tone_profile
 from web_research import research_company
@@ -84,6 +89,11 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "chosen_angle": "",
         "opening_line": "",
         "tailored_insight": "",
+        "prompt_set_hash": "",
+        "evidence_prompt_hash": "",
+        "write_prompt_hash": "",
+        "qc_prompt_hash": "",
+        "tone_profile_hash": "",
         "confidence_score": "",
         "evidence_strength_score": "",
         "personalization_quality_score": "",
@@ -108,10 +118,18 @@ def _template_preview(lead: LeadInput, opening_line: str) -> str:
     return f"Hey {_first_name(lead.recipient_name)}\n\n{line}\n\n{next_sentence}"
 
 
-def _attach_run_metadata(row: dict[str, Any], client: LLMClient, tone_profile_name: str) -> dict[str, Any]:
+def _attach_run_metadata(
+    row: dict[str, Any],
+    client: LLMClient,
+    tone_profile_name: str,
+    prompt_meta: dict[str, str] | None = None,
+    tone_hash: str = "",
+) -> dict[str, Any]:
     row["tone_profile"] = tone_profile_name
     row["model_provider"] = client.settings.llm_provider
     row["model_name"] = client.settings.model_name
+    row.update(prompt_meta or {})
+    row["tone_profile_hash"] = tone_hash
     usage = client.usage_summary()
     row["llm_calls"] = usage["llm_calls"]
     row["estimated_input_tokens"] = usage["estimated_input_tokens"]
@@ -598,6 +616,14 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
     settings = load_settings()
     client = LLMClient(settings)
     tone_profile_name = str(getattr(args, "tone_profile", "") or settings.tone_profile)
+    prompt_meta = prompt_hashes()
+    tone_profile_for_hash = load_tone_profile(tone_profile_name)
+    tone_hash = tone_profile_hash(tone_profile_for_hash.to_prompt_payload())
+    run_id = uuid.uuid4().hex[:16]
+    if not getattr(args, "skip_preflight", False):
+        checks = run_preflight(settings, output_dir=Path(args.output).parent, check_api=False)
+        if has_blocking_failures(checks):
+            raise RuntimeError("Pre-flight system check failed:\n" + preflight_summary(checks))
     leads = load_leads(args.input, args.campaign_context, deduplicate=not args.reuse_duplicate_personalization)
     total = len(leads)
     _emit_progress(
@@ -653,6 +679,8 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
                     _placeholder_row(lead, "Row was not processed because input validation failed"),
                     client,
                     tone_profile_name,
+                    prompt_meta,
+                    tone_hash,
                 )
             )
             _emit_progress(
@@ -672,6 +700,8 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
                     _copy_personalization_for_contact(processed_by_key[key], lead),
                     client,
                     tone_profile_name,
+                    prompt_meta,
+                    tone_hash,
                 )
             )
             _emit_progress(
@@ -687,7 +717,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         if not ai_available:
             row = _offline_research_row(lead, args.deep_research)
             row["reviewer_notes"] = join_list([row.get("reviewer_notes", ""), ai_unavailable_note])
-            row = _attach_run_metadata(row, client, tone_profile_name)
+            row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
             rows.append(row)
             processed_by_key[key] = row
             _emit_progress(
@@ -702,7 +732,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
             continue
         try:
             row = _process_valid_lead(client, lead, args.manual_review_mode, args.deep_research, tone_profile_name)
-            row = _attach_run_metadata(row, client, tone_profile_name)
+            row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
             rows.append(row)
             processed_by_key[key] = row
             _emit_progress(
@@ -718,7 +748,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
             logging.exception("Failed to process %s", lead.company_name)
             if args.manual_review_mode:
                 row = _placeholder_row(lead, f"Processing failed: {exc}")
-                row = _attach_run_metadata(row, client, tone_profile_name)
+                row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
                 rows.append(row)
                 processed_by_key[key] = row
                 _emit_progress(
@@ -734,8 +764,20 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
                 raise
 
     usage = client.usage_summary()
-    for row in rows:
+    for row_index, row in enumerate(rows, 1):
+        row["run_id"] = row.get("run_id") or run_id
+        row["row_id"] = row.get("row_id") or str(row_index)
+        row["example_id"] = row.get("example_id") or stable_hash(
+            row["run_id"],
+            row["row_id"],
+            row.get("company_name", ""),
+            row.get("recipient_name", ""),
+            row.get("opening_line", ""),
+        )
         row.update(usage)
+        row.update(prompt_meta)
+        row["tone_profile_hash"] = tone_hash
+    append_generated_email_rows(rows)
     _emit_progress(
         progress_callback,
         event="export",
@@ -749,6 +791,14 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         export_client_batch_rows(rows, args.output)
     else:
         export_rows(rows, args.output)
+    sending_preset = str(getattr(args, "sending_tool_preset", "") or "").strip()
+    if sending_preset:
+        sending_output = str(getattr(args, "sending_tool_output", "") or "").strip()
+        if not sending_output:
+            base = Path(args.output)
+            sending_output = str(base.with_name(f"{base.stem}_{sending_preset}.csv"))
+        export_sending_tool_rows(rows, sending_output, preset=sending_preset)
+        logging.info("Exported %s sending-tool rows to %s", sending_preset, sending_output)
     logging.info("Exported %s rows to %s", len(rows), args.output)
     _emit_progress(
         progress_callback,

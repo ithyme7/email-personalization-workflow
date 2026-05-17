@@ -25,17 +25,18 @@ De launcher kiest automatisch `localhost:8501`, of de volgende vrije poort als 8
 1. Upload een CSV, laad een Google Sheet, of kies de demo sample.
 2. Vul de campaign context in.
 3. Kies een model provider, model en eventueel API key in de sidebar.
-4. Kies een tone profile uit de 50 presets.
-5. Maak optioneel een klant-specifiek tone profile.
-6. Klik op `Run batch`.
-7. Volg de voortgang via de laadbalk. De run draait op de achtergrond, zodat de app status kan blijven tonen in plaats van te bevriezen.
-8. Bekijk het dashboard voor sendability, review workload, visual confidence, friction types, quality flags en kosteninschatting.
-9. Review en edit de rows in de `Review & Edit` tab.
-10. Zet per rij eventueel `human_decision`, `edited_line`, `edit_reason_category` en `edit_notes`.
-11. Sla goede/mislukte menselijke edits optioneel op als goldset.
-12. Gebruik eventueel `Client Training` om een simpele feedback-template voor de klant te maken.
-13. Check optioneel de `Evals` tab als je een frozen eval set hebt.
-14. Exporteer als CSV, XLSX, full workbook, client delivery export, client-safe package of naar Google Sheets.
+4. Klik eventueel op `Run system check` voordat je een grote batch start.
+5. Kies een tone profile uit de 50 presets.
+6. Maak optioneel een klant-specifiek tone profile.
+7. Klik op `Run batch`.
+8. Volg de voortgang via de laadbalk. De run draait op de achtergrond, zodat de app status kan blijven tonen in plaats van te bevriezen.
+9. Bekijk het dashboard voor sendability, review workload, visual confidence, friction types, quality flags en kosteninschatting.
+10. Review en edit de rows in de `Review & Edit` tab.
+11. Zet per rij eventueel `human_decision`, `edited_line`, `edit_reason_category` en `edit_notes`.
+12. Sla goede/mislukte menselijke edits optioneel op als goldset.
+13. Gebruik eventueel `Client Training` om een simpele feedback-template voor de klant te maken.
+14. Check optioneel de `Evals` tab als je een frozen eval set hebt.
+15. Exporteer als CSV, XLSX, full workbook, client delivery export, sending-tool import, client-safe package of naar Google Sheets.
 
 ## Demo mode
 
@@ -46,6 +47,22 @@ Gebruik `Demo sample` in de input-keuze om de workflow tijdens een call te laten
 Elke run wordt lokaal opgeslagen in de history met datum, aantal rows, ready/review verdeling, model, tone profile, kosteninschatting en outputbestand. Vanuit de `History` tab kun je een eerdere workbook opnieuw laden of downloaden.
 
 De history gebruikt nu lokaal SQLite in plaats van alleen losse JSONL-regels. Dat maakt de app-state stabieler wanneer je vaker batches draait of de app opnieuw opent.
+
+De run en rows bewaren ook prompt-hashes zoals `prompt_set_hash`, `write_prompt_hash`, `qc_prompt_hash` en `tone_profile_hash`. Daardoor kun je later campagneresultaten koppelen aan de exacte promptversie die de line heeft gemaakt.
+
+## Pre-flight System Check
+
+Gebruik `Run system check` in de sidebar vóór grote batches.
+
+De check controleert:
+
+- outputmap schrijfbaar
+- SQLite history schrijfbaar
+- proxy werkt als er een proxy is ingesteld
+- API key/model bereikbaar als er een key is ingevuld
+- OCR klaar als screenshots client-safe moeten worden geleverd
+
+Een ontbrekende API key is een waarschuwing, geen harde fout. De tool kan dan nog steeds research-only output maken.
 
 ## Tone calibration
 
@@ -201,6 +218,17 @@ python tools/check_ocr.py
 ```
 
 Gebruik `REQUIRE_SCREENSHOT_OCR=false` alleen voor lokale/interne debugging, niet voor klantlevering.
+
+## Sending-tool Exports
+
+In de `Export` tab kun je naast normale CSV/XLSX ook een native importbestand maken voor:
+
+- Generic
+- Lemlist
+- Instantly
+- Smartlead
+
+De tool zet de kolommen dan alvast om naar namen zoals `firstName`, `companyName`, `icebreaker` of `personalization`, zodat je minder handmatig hoeft te mappen in de sending tool.
 
 ## Google Sheets
 

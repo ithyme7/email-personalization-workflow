@@ -15,6 +15,7 @@ from openpyxl.utils import get_column_letter
 
 from models import OUTPUT_COLUMNS
 from sendability import evaluate_sendability
+from export_mappings import sending_tool_dataframe
 
 
 CLIENT_REVIEW_COLUMNS = [
@@ -84,6 +85,11 @@ CLIENT_REVIEW_COLUMNS = [
     "tone_profile",
     "model_provider",
     "model_name",
+    "prompt_set_hash",
+    "evidence_prompt_hash",
+    "write_prompt_hash",
+    "qc_prompt_hash",
+    "tone_profile_hash",
 ]
 
 CLIENT_RESEARCH_COLUMNS = [
@@ -94,6 +100,11 @@ CLIENT_RESEARCH_COLUMNS = [
     "tone profile",
     "model provider",
     "model name",
+    "prompt set hash",
+    "evidence prompt hash",
+    "write prompt hash",
+    "qc prompt hash",
+    "tone profile hash",
     "llm calls",
     "estimated input tokens",
     "estimated output tokens",
@@ -161,6 +172,18 @@ def export_rows(rows: list[dict[str, Any]], output_path: str | Path) -> None:
         df.to_excel(path, index=False)
     else:
         df.to_csv(path, index=False, encoding="utf-8")
+
+
+def export_sending_tool_rows(rows: list[dict[str, Any]], output_path: str | Path, preset: str = "generic") -> None:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    review_rows, _ = _client_rows(rows)
+    df = pd.DataFrame(review_rows, columns=CLIENT_REVIEW_COLUMNS)
+    mapped = sending_tool_dataframe(df, preset=preset)
+    if path.suffix.lower() == ".xlsx":
+        mapped.to_excel(path, index=False)
+    else:
+        mapped.to_csv(path, index=False, encoding="utf-8-sig")
 
 
 def _shorten(value: Any, limit: int = 420) -> str:
@@ -289,6 +312,11 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
             "tone_profile": row.get("tone_profile", ""),
             "model_provider": row.get("model_provider", ""),
             "model_name": row.get("model_name", ""),
+            "prompt_set_hash": row.get("prompt_set_hash", ""),
+            "evidence_prompt_hash": row.get("evidence_prompt_hash", ""),
+            "write_prompt_hash": row.get("write_prompt_hash", ""),
+            "qc_prompt_hash": row.get("qc_prompt_hash", ""),
+            "tone_profile_hash": row.get("tone_profile_hash", ""),
         }
         review_row.update(evaluate_sendability(review_row))
         review_row.setdefault("human_decision", "unreviewed")
@@ -305,6 +333,11 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "tone profile": row.get("tone_profile", ""),
                 "model provider": row.get("model_provider", ""),
                 "model name": row.get("model_name", ""),
+                "prompt set hash": row.get("prompt_set_hash", ""),
+                "evidence prompt hash": row.get("evidence_prompt_hash", ""),
+                "write prompt hash": row.get("write_prompt_hash", ""),
+                "qc prompt hash": row.get("qc_prompt_hash", ""),
+                "tone profile hash": row.get("tone_profile_hash", ""),
                 "llm calls": row.get("llm_calls", ""),
                 "estimated input tokens": row.get("estimated_input_tokens", ""),
                 "estimated output tokens": row.get("estimated_output_tokens", ""),

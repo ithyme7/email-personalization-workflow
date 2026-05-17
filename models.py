@@ -5,6 +5,9 @@ from typing import Any
 
 
 OUTPUT_COLUMNS = [
+    "row_id",
+    "run_id",
+    "example_id",
     "company_name",
     "website_url",
     "linkedin_url",
@@ -14,6 +17,11 @@ OUTPUT_COLUMNS = [
     "tone_profile",
     "model_provider",
     "model_name",
+    "prompt_set_hash",
+    "evidence_prompt_hash",
+    "write_prompt_hash",
+    "qc_prompt_hash",
+    "tone_profile_hash",
     "llm_calls",
     "estimated_input_tokens",
     "estimated_output_tokens",
