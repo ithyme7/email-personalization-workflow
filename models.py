@@ -101,6 +101,7 @@ class LeadInput:
     is_valid: bool = True
     validation_errors: list[str] = field(default_factory=list)
     is_duplicate: bool = False
+    original_columns: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

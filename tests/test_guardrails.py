@@ -10,6 +10,7 @@ from deliverability import deliverability_flags
 from grounding import grounding_flags
 from llm_client import LLMBudgetExceeded, LLMClient
 from models import EvidenceFact, EvidenceResult, PersonalizationDraft
+from copy_guardrails import local_personalization_flags
 
 
 def _settings(**overrides) -> Settings:
@@ -77,8 +78,20 @@ def test_grounding_flags_unsupported_line() -> None:
     assert "evidence_used_not_in_extracted_facts" in flags
 
 
+def test_download_claim_is_flagged() -> None:
+    draft = PersonalizationDraft(
+        opening_line="I downloaded the example app and the signup step could cost activation.",
+        tailored_insight="",
+        chosen_angle="",
+        evidence_used_for_copy=["The app listing mentions signup."],
+    )
+    flags = local_personalization_flags(draft)
+    assert "download_claim" in flags
+
+
 if __name__ == "__main__":
     test_budget_circuit_breaker_blocks_before_api_call()
     test_deliverability_flags_html_and_spam()
     test_grounding_flags_unsupported_line()
+    test_download_claim_is_flagged()
     print("guardrail_tests_ok")

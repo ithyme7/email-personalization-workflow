@@ -246,8 +246,11 @@ def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
                         + ", ".join(visual.quality_flags)
                         + f" | confidence: {visual.confidence} ({visual.confidence_score}/100)"
                     )
+        if renderer:
+            renderer.__exit__(None, None, None)
+            renderer = None
         advanced = run_advanced_detectors(lead.website_url, lead.company_name, settings)
-        if advanced.findings or advanced.flags:
+        if advanced.findings or advanced.flags or advanced.screenshot_paths or advanced.reviewer_notes:
             result.advanced_detector_flags = advanced.flags
             result.ux_validator_findings = advanced.findings
             result.dead_link_checks = advanced.dead_link_checks
@@ -258,6 +261,8 @@ def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
                 result.reviewer_notes.append(
                     "Advanced detector found internal UX validation signals: " + ", ".join(advanced.flags[:8])
                 )
+            elif advanced.screenshot_paths:
+                result.reviewer_notes.append("Advanced detector completed with no high-confidence UX flags.")
     finally:
         if renderer:
             renderer.__exit__(None, None, None)

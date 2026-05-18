@@ -265,6 +265,8 @@ BROWSER_USER_AGENT=
 
 Laat `BROWSER_PROXY_URL` leeg tenzij je een legitieme proxy voor je eigen workflow hebt. Dit is bedoeld om tijdelijke failures en rate-limit ruis te verminderen, niet om toegang te forceren.
 
+De pre-flight check controleert nu ook of Playwright + axe echt kunnen starten. Als Lighthouse aan staat, controleert hij ook of `npx` of `npm` beschikbaar is. Als die runner ontbreekt, stopt de batch vooraf in plaats van achteraf lege Lighthouse/visual signalen te geven.
+
 ## Belangrijk
 
 Zonder API key draait de app nog steeds als research/review workflow, maar worden er geen nieuwe AI-personalized lines gegenereerd.

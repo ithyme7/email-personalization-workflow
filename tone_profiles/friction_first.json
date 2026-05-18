@@ -1,7 +1,7 @@
 {
   "name": "friction_first",
   "description": "Short, conversational cold-email openers built around a specific current friction point and a likely business/user outcome.",
-  "opening_style": "Open as a first-person surface check: I was checking out, I opened, I downloaded, or I was on the product website/app.",
+  "opening_style": "Open as a first-person surface check: I was checking out, I opened, I was looking at the App Store listing, or I was on the product website/app. Do not claim the sender downloaded or installed the app.",
   "angle_priorities": [
     "Broken formatting, especially mobile layout issues.",
     "Conversion friction such as unclear CTA, hidden signup/login, unnecessary onboarding steps, booking friction, checkout friction, or too many steps before value.",
@@ -13,7 +13,7 @@
   "preferred_phrases": [
     "I was checking out the [product] app...",
     "I opened the [product] app...",
-    "I downloaded the [product] app...",
+    "I was looking at the [product] App Store listing...",
     "I was on the [product] website...",
     "I'd guess...",
     "I bet...",
@@ -39,7 +39,7 @@
     "Low-confidence visual findings need manual review before being treated as confirmed."
   ],
   "example_good_lines": [
-    "I downloaded the FitRooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon.",
+    "I opened the fitrooms app listing and noticed the booking flow screenshots take a few taps before you see available slots, I'd guess that's costing bookings from users looking to book soon.",
     "I was on the SleepWorks website and noticed the case study links go to external sources rather than direct customer quotes on the page, pulling those quotes closer to the CTA would likely lift conversion."
   ],
   "example_bad_lines": [

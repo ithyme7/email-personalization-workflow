@@ -21,7 +21,7 @@ Rules:
 - Prefer evidence that can become a specific drop-off hypothesis: onboarding step, unclear first action, booking flow, signup flow, paywall, dead button, external proof link, unclear CTA, too many features at once, weak proof near conversion, confusing route to value.
 - Treat rendered visual-review observations as high-value when they describe a specific issue such as no CTA above the fold, low contrast CTA, mobile horizontal overflow, small tap targets, hidden signup/login, or too many competing CTAs.
 - Treat UX validator findings as internal detection criteria, not copy. They may support a fact such as "the main CTA is easy to miss" or "the page formatting breaks on mobile", but do not preserve technical language like "contrast ratio", "tap target", "horizontal overflow", or "axe-core violation" as the final customer-facing angle.
-- If product_surface_type is app_first_product, app/onboarding evidence outranks blog and generic website observations. Use this order: App Store or Google Play listing, screenshots, public review complaints, onboarding permissions, signup requirement, paywall/subscription/access-code, then website or landing page.
+- If product_surface_type is app_first_product, app/onboarding evidence outranks blog and generic website observations. Use this order: Apple App Store listing/reviews when available, Google Play listing, screenshots, public review complaints, onboarding permissions, signup requirement, paywall/subscription/access-code, then website or landing page.
 - If product_surface_type is website_first_leadgen, B2B service, commerce_product_page, or marketplace_booking_flow, choose the surface that matches the conversion moment: form/demo, proof/demo flow, product/checkout, or booking availability.
 - Use visual confidence when present:
   - high visual confidence can support a strong fact.
@@ -31,7 +31,7 @@ Rules:
   - small tap-target and low-contrast findings are lower-confidence unless the evidence explicitly says the measurement is reliable.
   - horizontal overflow with visible offscreen elements is higher-confidence than scroll width alone.
 - Use this priority order for angles:
-  1. For app-first products: app listing, screenshots, review complaints, onboarding/signup/paywall/access-code evidence.
+  1. For app-first products: Apple App Store listing/reviews when available, then Google Play, screenshots, review complaints, onboarding/signup/paywall/access-code evidence.
   2. Broken formatting or visibly broken mobile/landing-page experience.
   3. Conversion best-practice issues such as low-visibility CTA, unclear primary action, unnecessary onboarding clicks, hidden login/signup options, checkout friction, or too many steps before value.
   4. Weak testimonials, weak case studies, vague proof, missing screenshots, or external proof links where direct proof on-page would likely improve trust.
@@ -45,7 +45,7 @@ Rules:
 - Broad positioning should rank below concrete bugs, CTA issues, onboarding friction, and proof issues.
 - Blog facts should almost never be the selected angle when any website/app/visual/proof friction exists.
 - For app-first companies, prefer app experience evidence when the supplied website text mentions the app, onboarding, booking, signups, assessments, sessions, subscriptions, or user flows.
-- For app-first companies, do not choose a blog or generic website observation if there is any specific app listing, screenshot, review complaint, onboarding, signup, paywall, subscription, access-code, or permission evidence.
+- For app-first companies, do not choose a blog or generic website observation if there is any specific Apple App Store, Google Play, screenshot, review complaint, onboarding, signup, paywall, subscription, access-code, or permission evidence.
 - Treat manual app/onboarding observations and app-store listing details as high-value evidence when they are specific and source-noted.
 - Treat LinkedIn observations as person-level evidence only when supplied by the reviewer. Do not scrape or infer LinkedIn content.
 - Use recent news/product update notes only when supplied or present in website research text.

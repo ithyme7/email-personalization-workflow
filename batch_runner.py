@@ -39,7 +39,7 @@ def _emit_progress(progress_callback: ProgressCallback | None, **payload: Any) -
 
 
 def _base_row(lead: LeadInput) -> dict[str, Any]:
-    return {
+    row = {
         "company_name": lead.company_name,
         "website_url": lead.website_url,
         "linkedin_url": lead.linkedin_url,
@@ -103,6 +103,10 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "needs_manual_review": True,
         "reviewer_notes": "",
     }
+    for column, value in lead.original_columns.items():
+        if str(column).strip():
+            row[f"input__{str(column).strip()}"] = value
+    return row
 
 
 def _first_name(name: str) -> str:
@@ -343,6 +347,12 @@ def _copy_personalization_for_contact(row: dict[str, Any], lead: LeadInput) -> d
             "competitor_context": lead.competitor_context,
         }
     )
+    for key in list(copied.keys()):
+        if key.startswith("input__"):
+            copied.pop(key, None)
+    for column, value in lead.original_columns.items():
+        if str(column).strip():
+            copied[f"input__{str(column).strip()}"] = value
     note = copied.get("reviewer_notes", "")
     copied["reviewer_notes"] = join_list([note, "Reused personalization from duplicate company row"])
     copied["template_preview"] = _template_preview(lead, copied.get("opening_line", ""))
@@ -570,6 +580,7 @@ def _process_valid_lead(
         "app_store_angle_review",
         "low_confidence_visual_finding",
         "technical_audit_language",
+        "download_claim",
     }
     existing_flags = {
         flag.strip()

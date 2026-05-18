@@ -163,11 +163,12 @@ def export_rows(rows: list[dict[str, Any]], output_path: str | Path) -> None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    columns = _columns_with_input_extras(OUTPUT_COLUMNS, rows)
     normalized_rows = []
     for row in rows:
-        normalized_rows.append({column: row.get(column, "") for column in OUTPUT_COLUMNS})
+        normalized_rows.append({column: row.get(column, "") for column in columns})
 
-    df = pd.DataFrame(normalized_rows, columns=OUTPUT_COLUMNS)
+    df = pd.DataFrame(normalized_rows, columns=columns)
     if path.suffix.lower() == ".xlsx":
         df.to_excel(path, index=False)
     else:
@@ -178,7 +179,7 @@ def export_sending_tool_rows(rows: list[dict[str, Any]], output_path: str | Path
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     review_rows, _ = _client_rows(rows)
-    df = pd.DataFrame(review_rows, columns=CLIENT_REVIEW_COLUMNS)
+    df = pd.DataFrame(review_rows, columns=_columns_with_input_extras(CLIENT_REVIEW_COLUMNS, review_rows))
     mapped = sending_tool_dataframe(df, preset=preset)
     if path.suffix.lower() == ".xlsx":
         mapped.to_excel(path, index=False)
@@ -240,6 +241,17 @@ def _clean_notes(value: Any) -> str:
 def _cell_lines(value: Any, limit: int = 900) -> str:
     text = _shorten(value, limit)
     return text.replace(" | ", "\n").replace("; ", "\n")
+
+
+def _input_extra_columns(rows: list[dict[str, Any]]) -> list[str]:
+    columns: list[str] = []
+    for row in rows:
+        columns.extend([key for key in row.keys() if str(key).startswith("input__")])
+    return sorted(dict.fromkeys(columns), key=lambda value: value.lower())
+
+
+def _columns_with_input_extras(base_columns: list[str], rows: list[dict[str, Any]]) -> list[str]:
+    return list(base_columns) + [column for column in _input_extra_columns(rows) if column not in base_columns]
 
 
 def _is_manual_review(value: Any) -> bool:
@@ -323,9 +335,11 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
         review_row.setdefault("edited_line", "")
         review_row.setdefault("edit_reason_category", "not_reviewed")
         review_row.setdefault("edit_notes", "")
+        for key, value in row.items():
+            if str(key).startswith("input__"):
+                review_row[key] = value
         review_rows.append(review_row)
-        research_rows.append(
-            {
+        research_row = {
                 "company": row.get("company_name", ""),
                 "person": row.get("recipient_name", ""),
                 "role": row.get("recipient_role", ""),
@@ -377,7 +391,10 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "source urls": _shorten(row.get("source_urls", ""), 500),
                 "raw reviewer notes": notes,
             }
-        )
+        for key, value in row.items():
+            if str(key).startswith("input__"):
+                research_row[key] = value
+        research_rows.append(research_row)
     return review_rows, research_rows
 
 
@@ -786,7 +803,8 @@ def _write_readable_xlsx(rows: list[dict[str, Any]], output_path: Path) -> None:
     _write_dashboard(dashboard, review_rows, research_rows)
 
     ws = wb.create_sheet("Review")
-    _write_sheet(ws, CLIENT_REVIEW_COLUMNS, review_rows)
+    review_columns = _columns_with_input_extras(CLIENT_REVIEW_COLUMNS, review_rows)
+    _write_sheet(ws, review_columns, review_rows)
     _style_sheet(
         ws,
         [14, 14, 12, 48, 42, 42, 12, 12, 12, 12, 14, 12, 44, 12, 48, 16, 70, 22, 20, 72, 78, 24, 24, 24, 28, 26, 64, 28, 18, 72, 52, 16, 26, 56, 24, 30, 48],
@@ -796,7 +814,8 @@ def _write_readable_xlsx(rows: list[dict[str, Any]], output_path: Path) -> None:
     _style_review_status(ws)
 
     details = wb.create_sheet("Research Details")
-    _write_sheet(details, CLIENT_RESEARCH_COLUMNS, research_rows)
+    research_columns = _columns_with_input_extras(CLIENT_RESEARCH_COLUMNS, research_rows)
+    _write_sheet(details, research_columns, research_rows)
     _style_sheet(
         details,
         [22, 20, 24, 30, 20, 20, 28, 42, 48, 26, 70, 78, 78, 78, 36, 20, 78, 78, 24, 24, 24, 28, 52, 78, 16, 14, 52, 78, 18, 22, 52, 60],
@@ -876,6 +895,6 @@ def export_client_batch_rows(rows: list[dict[str, Any]], output_path: str | Path
         _copy_assets_for_delivery(rows, path)
     else:
         compact_rows, _ = _client_rows(rows)
-        df = pd.DataFrame(compact_rows, columns=CLIENT_REVIEW_COLUMNS)
+        df = pd.DataFrame(compact_rows, columns=_columns_with_input_extras(CLIENT_REVIEW_COLUMNS, compact_rows))
         df.to_csv(path, index=False, encoding="utf-8-sig", sep=";")
         _copy_assets_for_delivery(rows, path)

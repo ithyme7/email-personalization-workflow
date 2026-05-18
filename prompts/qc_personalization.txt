@@ -8,14 +8,16 @@ Check whether the draft follows the client's standard:
 - Every claim is supported by supplied evidence.
 - If the line references LinkedIn, app walkthroughs, screenshots, news, or competitors, that claim must be present in the supplied evidence.
 - Does not sound AI-generated.
-- Opens conversationally as a surface check, for example "I was just checking out the [product] app...", "I downloaded the [product] app...", "I opened the [product] app...", or "I was on the [product] website...".
+- Opens conversationally as a surface check, for example "I was just checking out the [product] app...", "I opened the [product] app/listing...", "I was looking at the [product] App Store listing...", or "I was on the [product] website...".
 - Uses "the [product] app" or "the [product] website" instead of a domain-first phrase when possible.
+- Does not claim "I downloaded the app" or "I installed the app" unless a human reviewer supplied a manual app walkthrough note proving it.
+- Keeps company/product names lowercase when the supplied name is lowercase, rather than title-casing them into something more AI-like.
 - Names one specific issue, such as onboarding friction, unclear first action, booking friction, signup friction, paywall friction, dead button, weak proof, unclear value prop, or a website/app flow that could cause drop-off.
 - Ties that issue to user behaviour, activation, conversion, retention, bookings, signup completion, first-session churn, paywall conversion, or drop-off.
 - Flows naturally into the required next sentence in email_template_context.
 - Reads like a mini hypothesis from someone who checked the app/page, not like a generic growth suggestion.
 - Prioritizes the configured issue types when supported by evidence: broken formatting, low-visibility CTA, unnecessary onboarding clicks, hidden signup/login options, checkout friction, weak proof/testimonials, weak case studies, or broad positioning.
-- If the evidence indicates an app-first product, prioritizes app/onboarding, app listing, screenshot, review complaint, signup, paywall, subscription, permission, or access-code evidence over blog or generic website observations.
+- If the evidence indicates an app-first product, prioritizes app/onboarding, Apple App Store listing/reviews, Google Play listing, screenshot, review complaint, signup, paywall, subscription, permission, or access-code evidence over blog or generic website observations.
 - Uses UX validator findings as support only, not as audit-report wording. Technical phrases like contrast ratio, tap target, horizontal overflow, WCAG, axe-core, Lighthouse, or validator should usually fail tone unless they are hidden in evidence, not copy.
 - Does not use a blog post as the angle unless the blog directly reveals a positioning, onboarding, conversion, or proof issue.
 - Contains no generic praise.
@@ -28,7 +30,7 @@ Check whether the draft follows the client's standard:
 - If tone_profile.custom_prompt is supplied, follows it only when it is compatible with the evidence, no-hallucination, no-genericness, and no-em-dash rules.
 
 Tone examples:
-- "I downloaded the FitRooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon."
+- "I opened the fitrooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon."
 - "I opened the FocusBoard app and got hit with calendar, tasks, notes, and health widgets on the first screen, I bet some new users churn because there is no obvious place to start."
 - "I was on the SleepWorks website and noticed the case study links go to external sources rather than direct customer quotes on the page, pulling those quotes closer to the CTA would likely lift conversion."
 - "I was checking out the RunTrail website and saw the main CTA blends into the background colour, I'd bet that is costing you signups."
@@ -38,6 +40,7 @@ Mandatory flags:
 - Include "em_dash" if the opening line or insight contains an em dash.
 - Include "genericness" if the opening line or insight could apply to many companies.
 - Include "unsupported_claims" if any claim is not present in the supplied evidence.
+- Include "download_claim" if the line says the sender downloaded or installed the app without a supplied manual app walkthrough note.
 - Include "generic_praise" if it relies on vague praise.
 - Include "too_long" if the opening line is over 40 words or feels bloated.
 - Include "ai_mush" if it sounds robotic, templated, or synthetic.

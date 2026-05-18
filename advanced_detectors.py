@@ -20,6 +20,7 @@ from config import DATA_DIR, RESOURCE_DIR, SCREENSHOT_DIR, Settings
 TRACE_DIR = DATA_DIR / "traces"
 LIGHTHOUSE_DIR = DATA_DIR / "lighthouse"
 AXE_CORE_PATH = RESOURCE_DIR / "vendor" / "axe.min.js"
+DISABLED_VALUES = {"0", "false", "no", "off", "disabled", "none"}
 
 
 @dataclass
@@ -30,6 +31,18 @@ class AdvancedDetectorResult:
     screenshot_paths: list[str] = field(default_factory=list)
     trace_files: list[str] = field(default_factory=list)
     reviewer_notes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DetectorReadiness:
+    name: str
+    status: str
+    message: str
+    blocking: bool = False
+
+
+def _enabled(value: str) -> bool:
+    return str(value or "").strip().lower() not in DISABLED_VALUES
 
 
 def _slug(value: str) -> str:
@@ -50,7 +63,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 def run_advanced_detectors(url: str, company_name: str, settings: Settings) -> AdvancedDetectorResult:
     result = AdvancedDetectorResult()
-    if settings.advanced_detectors in {"0", "false", "no", "off", "disabled"}:
+    if not _enabled(settings.advanced_detectors):
         return result
 
     playwright_result = _run_playwright_checks(url, company_name, settings)
@@ -61,7 +74,7 @@ def run_advanced_detectors(url: str, company_name: str, settings: Settings) -> A
     result.trace_files.extend(playwright_result.trace_files)
     result.reviewer_notes.extend(playwright_result.reviewer_notes)
 
-    if settings.lighthouse_review not in {"0", "false", "no", "off", "disabled"}:
+    if _enabled(settings.lighthouse_review):
         lighthouse_result = _run_lighthouse_checks(url, company_name, settings)
         result.flags.extend(lighthouse_result.flags)
         result.findings.extend(lighthouse_result.findings)
@@ -74,6 +87,86 @@ def run_advanced_detectors(url: str, company_name: str, settings: Settings) -> A
     result.trace_files = _dedupe(result.trace_files)
     result.reviewer_notes = _dedupe(result.reviewer_notes)
     return result
+
+
+def _find_executable(names: list[str]) -> str:
+    common_dirs = [
+        Path(os.environ.get("ProgramFiles", "")) / "nodejs",
+        Path(os.environ.get("ProgramFiles(x86)", "")) / "nodejs",
+        Path(os.environ.get("APPDATA", "")) / "npm",
+    ]
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+        for directory in common_dirs:
+            candidate = directory / name
+            if candidate.exists():
+                return str(candidate)
+    return ""
+
+
+def _lighthouse_command_prefix() -> list[str]:
+    npx = _find_executable(["npx.cmd", "npx"])
+    if npx:
+        return [npx, "--yes", "lighthouse"]
+    npm = _find_executable(["npm.cmd", "npm"])
+    if npm:
+        return [npm, "exec", "--yes", "lighthouse", "--"]
+    return []
+
+
+def check_detector_readiness(settings: Settings) -> list[DetectorReadiness]:
+    checks: list[DetectorReadiness] = []
+    if not _enabled(settings.advanced_detectors):
+        checks.append(DetectorReadiness("Playwright + axe", "ok", "Advanced browser detectors are disabled."))
+    else:
+        try:
+            from playwright.sync_api import sync_playwright
+
+            with sync_playwright() as p:
+                launch_kwargs: dict[str, Any] = {"headless": True}
+                if settings.browser_proxy_url:
+                    launch_kwargs["proxy"] = {"server": settings.browser_proxy_url}
+                browser = p.chromium.launch(**launch_kwargs)
+                context_kwargs: dict[str, Any] = {"viewport": {"width": 390, "height": 844}, "is_mobile": True}
+                if settings.browser_user_agent:
+                    context_kwargs["user_agent"] = settings.browser_user_agent
+                context = browser.new_context(**context_kwargs)
+                page = context.new_page()
+                page.goto("https://example.com", wait_until="domcontentloaded", timeout=settings.request_timeout_seconds * 1000)
+                if AXE_CORE_PATH.exists():
+                    page.add_script_tag(path=str(AXE_CORE_PATH))
+                    axe_source = str(AXE_CORE_PATH)
+                else:
+                    page.add_script_tag(url="https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js")
+                    axe_source = "CDN fallback"
+                axe_loaded = bool(page.evaluate("() => Boolean(window.axe)"))
+                context.close()
+                browser.close()
+            if axe_loaded:
+                checks.append(DetectorReadiness("Playwright + axe", "ok", f"Browser renders and axe loads from {axe_source}."))
+            else:
+                checks.append(DetectorReadiness("Playwright + axe", "fail", "Browser rendered, but axe-core did not load.", True))
+        except Exception as exc:
+            checks.append(DetectorReadiness("Playwright + axe", "fail", f"Advanced browser detector check failed: {exc}", True))
+
+    if not _enabled(settings.lighthouse_review):
+        checks.append(DetectorReadiness("Lighthouse", "ok", "Lighthouse checks are disabled."))
+    else:
+        prefix = _lighthouse_command_prefix()
+        if prefix:
+            checks.append(DetectorReadiness("Lighthouse", "ok", f"Lighthouse runner found via {prefix[0]}."))
+        else:
+            checks.append(
+                DetectorReadiness(
+                    "Lighthouse",
+                    "fail",
+                    "Lighthouse is enabled, but npx/npm is not available on PATH. Disable Lighthouse or install Node.js/npm.",
+                    True,
+                )
+            )
+    return checks
 
 
 def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> AdvancedDetectorResult:
@@ -93,15 +186,21 @@ def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> A
     trace_mode = os.getenv("PLAYWRIGHT_TRACES", "flagged").strip().lower()
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            launch_kwargs: dict[str, Any] = {"headless": True}
+            if settings.browser_proxy_url:
+                launch_kwargs["proxy"] = {"server": settings.browser_proxy_url}
+            browser = p.chromium.launch(**launch_kwargs)
             for label, viewport in viewports:
-                context = browser.new_context(
+                context_kwargs: dict[str, Any] = dict(
                     viewport={"width": viewport["width"], "height": viewport["height"]},
                     is_mobile=bool(viewport["is_mobile"]),
                     device_scale_factor=2 if viewport["is_mobile"] else 1,
                 )
+                if settings.browser_user_agent:
+                    context_kwargs["user_agent"] = settings.browser_user_agent
+                context = browser.new_context(**context_kwargs)
                 trace_path = _asset_path(TRACE_DIR, url, label, "zip", company_name)
-                collect_trace = trace_mode not in {"0", "false", "no", "off", "disabled", "none"}
+                collect_trace = trace_mode not in DISABLED_VALUES
                 if collect_trace:
                     context.tracing.start(screenshots=True, snapshots=True, sources=True)
                 page = context.new_page()
@@ -135,17 +234,20 @@ def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> A
                     result.reviewer_notes.append(f"Playwright check failed for {label}: {exc}")
                 finally:
                     if collect_trace:
-                        context.tracing.stop(path=str(trace_path))
-                        new_flagged_evidence = (
-                            had_playwright_error
-                            or bool(failed_responses)
-                            or len(result.flags) > flag_count_before
-                        )
-                        keep_trace = trace_mode in {"1", "true", "yes", "on", "always"} or new_flagged_evidence
-                        if keep_trace:
-                            result.trace_files.append(str(trace_path.resolve()))
-                        else:
-                            trace_path.unlink(missing_ok=True)
+                        try:
+                            context.tracing.stop(path=str(trace_path))
+                            new_flagged_evidence = (
+                                had_playwright_error
+                                or bool(failed_responses)
+                                or len(result.flags) > flag_count_before
+                            )
+                            keep_trace = trace_mode in {"1", "true", "yes", "on", "always"} or new_flagged_evidence
+                            if keep_trace:
+                                result.trace_files.append(str(trace_path.resolve()))
+                            else:
+                                trace_path.unlink(missing_ok=True)
+                        except Exception as exc:
+                            result.reviewer_notes.append(f"Playwright trace could not be saved for {label}: {exc}")
                     context.close()
             browser.close()
     except Exception as exc:
@@ -251,14 +353,13 @@ def _check_visible_links(page, base_url: str, max_links: int = 10) -> list[str]:
 
 def _run_lighthouse_checks(url: str, company_name: str, settings: Settings) -> AdvancedDetectorResult:
     result = AdvancedDetectorResult()
-    if shutil.which("npx") is None:
-        result.reviewer_notes.append("npx is not available, Lighthouse checks skipped.")
+    prefix = _lighthouse_command_prefix()
+    if not prefix:
+        result.flags.append("lighthouse_runner_unavailable")
+        result.reviewer_notes.append("Lighthouse is enabled, but npx/npm is not available. Lighthouse checks skipped.")
         return result
     output_path = _asset_path(LIGHTHOUSE_DIR, url, "lighthouse_mobile", "json", company_name)
-    command = [
-        "npx",
-        "--yes",
-        "lighthouse",
+    command = prefix + [
         url,
         "--output=json",
         f"--output-path={output_path}",

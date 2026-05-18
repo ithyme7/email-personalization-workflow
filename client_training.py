@@ -130,7 +130,7 @@ EXAMPLE_ROWS = [
         "current_line": "I was checking the website and noticed the location dropdown is not clearly clickable.",
         "opening_line": "I was checking the website and noticed the location dropdown is not clearly clickable.",
         "client_decision": "Rewrite",
-        "client_rewrite": "I downloaded the solo60 app and noticed the booking flow takes a few taps before you see available slots, which could cost bookings from users looking to train today.",
+        "client_rewrite": "I opened the solo60 app and noticed the booking flow takes a few taps before you see available slots, which could cost bookings from users looking to train today.",
         "main_reason": "Wrong surface",
         "surface_to_focus_on": "Booking flow",
         "evidence_or_context": "App-first product. Booking flow matters more than website dropdown.",

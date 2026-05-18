@@ -83,7 +83,6 @@ CONVERSATIONAL_STARTS = (
     "i just checked",
     "i checked",
     "i opened",
-    "i downloaded",
     "i tried",
     "i clicked",
     "i went through",

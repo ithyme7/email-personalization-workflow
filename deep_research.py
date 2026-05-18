@@ -39,6 +39,15 @@ COMPLAINT_TERMS = {
 }
 
 
+def _app_store_rank(url: str) -> tuple[int, str]:
+    normalized = str(url or "").lower()
+    if "apps.apple.com" in normalized:
+        return (0, normalized)
+    if "play.google.com" in normalized:
+        return (1, normalized)
+    return (9, normalized)
+
+
 def _cache_path(url: str) -> Path:
     digest = hashlib.sha256(f"deep:{url}".encode("utf-8")).hexdigest()
     return CACHE_DIR / f"{digest}.json"
@@ -99,7 +108,7 @@ def _discover_app_store_links(lead: LeadInput, settings: Settings) -> list[str]:
                 links.append(absolute)
     except requests.RequestException:
         return links
-    return links[:2]
+    return sorted(dict.fromkeys(links), key=_app_store_rank)[:3]
 
 
 def _apple_app_id(url: str) -> str:
@@ -196,6 +205,8 @@ def collect_deep_research(lead: LeadInput, settings: Settings) -> DeepResearchRe
     )
 
     app_links = _discover_app_store_links(lead, settings)
+    if app_links:
+        result.app_store_url = app_links[0]
     app_summaries: list[str] = []
     for url in app_links:
         fetched = _fetch_public_text(url, settings)

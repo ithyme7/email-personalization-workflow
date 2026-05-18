@@ -17,7 +17,7 @@ In a recent app project, session replays showed users bouncing off a paywall bec
 The opening line must prime the reader for drop-off, activation, bookings, signup completion, churn, paywall friction, retention, or conversion. It should feel like the sender actually checked the app or page.
 
 Angle priority:
-1. If there is a mobile app, app/onboarding evidence beats blog and generic website observations. Prefer App Store or Google Play listing, screenshots, review complaints, onboarding permissions, signup requirement, paywall/subscription/access-code, then website/landing page.
+1. If there is a mobile app, app/onboarding evidence beats blog and generic website observations. Prefer Apple App Store evidence first when available, then Google Play, then screenshots, review complaints, onboarding permissions, signup requirement, paywall/subscription/access-code, then website/landing page.
 2. Broken formatting on website/app, especially mobile formatting issues.
 3. Conversion best-practice issues: hard-to-see CTA, unclear primary action, unnecessary clicks in onboarding, hidden signup/login options, checkout friction, or too many steps before value.
 4. Weak testimonials or case studies without direct evidence, screenshots, quotes, or proof.
@@ -33,8 +33,10 @@ Opening line rules:
 - One sentence only.
 - Ideally 22 to 38 words.
 - Natural, sharp, and human.
-- Open conversationally with a first-person surface check, for example "I was just checking out the [product] app...", "I downloaded the [product] app...", "I opened the [product] app...", or "I was on the [product] website...".
+- Open conversationally with a first-person surface check, for example "I was just checking out the [product] app...", "I opened the [product] app/listing...", "I was looking at the [product] App Store listing...", or "I was on the [product] website...".
 - Say "the [product] app" or "the [product] website" instead of "[domain] website."
+- Do not say "I downloaded the app", "I installed the app", or imply that the sender personally downloaded/installed it. Use "I opened", "I was checking out", or "I was looking at the App Store listing" unless a human reviewer supplied a manual app walkthrough note.
+- Keep company or product names lowercase in the opening line when the supplied name is lowercase. Do not title-case a company name just to make it look cleaner.
 - Lead with a specific bug, friction point, unclear step, dead button, onboarding issue, booking issue, paywall issue, weak proof point, or unclear first action when evidence supports it.
 - Tie the observation to a concrete outcome such as user drop-off, activation, conversion, retention, bookings, signup completion, first-session churn, or paywall conversion.
 - Make the line flow naturally into the required_next_sentence supplied in the payload.
@@ -47,7 +49,7 @@ Opening line rules:
 - No unsupported claims.
 - Must feel written for this specific company or person.
 - If recipient role is relevant, lightly tailor the line to that role without forcing it.
-- Prefer the strongest evidence in this order: actual app/onboarding observation, concrete bug/friction point, public app-store/app listing detail, website flow detail, person-level LinkedIn observation supplied by reviewer, recent product/news note, competitor/context note.
+- Prefer the strongest evidence in this order: actual app/onboarding observation, concrete bug/friction point, Apple App Store listing/review detail, Google Play listing detail, website flow detail, person-level LinkedIn observation supplied by reviewer, recent product/news note, competitor/context note.
 - For app-first products, prefer app/onboarding and app-store/review/screenshot evidence over blog/site observations unless the site has a clearer current conversion bug.
 - Override that order when the evidence contains one of the client's priority issues: broken formatting, CTA visibility, unnecessary clicks, weak proof, or broad positioning.
 - Suitable as the first line of a cold email.
@@ -57,7 +59,7 @@ Opening line rules:
 - If the best visual finding is marked low-confidence, do not present it as a confirmed issue. Either use a stronger evidence-backed angle or keep the line conservative for manual review.
 
 Tone examples:
-- Good: "I downloaded the FitRooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon."
+- Good: "I opened the fitrooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon."
 - Good: "I opened the FocusBoard app and got hit with calendar, tasks, notes, and health widgets on the first screen, I bet some new users churn because there is no obvious place to start."
 - Good: "I was on the SleepWorks website and noticed the case study links go to external sources rather than direct customer quotes on the page, pulling those quotes closer to the CTA would likely lift conversion."
 - Good: "I was checking out the RunTrail website and saw the main CTA blends into the background colour, I'd bet that is costing you signups."

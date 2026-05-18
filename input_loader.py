@@ -76,8 +76,7 @@ def _first_present(row: pd.Series, candidates: list[str]) -> str:
 
 
 def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    working = df.copy()
-    working.columns = [str(column).strip() for column in working.columns]
+    working = _clean_dataframe(df)
     rename_map = {
         column: CLIENT_COLUMN_ALIASES[column]
         for column in working.columns
@@ -85,19 +84,34 @@ def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     }
     if rename_map:
         working = working.rename(columns=rename_map)
+    _fill_down_company_context(working)
+    return working
+
+
+def _clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    working = df.copy()
+    working.columns = [str(column).strip() for column in working.columns]
     working = working.apply(
         lambda column: column.map(
             lambda value: str(value).replace("\r", " ").replace("\n", " ").strip() if pd.notna(value) else ""
         )
     )
+    return working
+
+
+def _fill_down_company_context(working: pd.DataFrame) -> None:
     company_source_columns = [
         "Organization Name",
+        "Company Name",
         "Last Funding Amount",
         "Approx USD Equivalent",
         "website_url",
+        "Website",
         "Twitter",
         "Facebook",
         "linkedin_url",
+        "Linkedin",
+        "LinkedIn",
         "Contact Email",
         "Number of Articles",
         "Number of Employees",
@@ -110,7 +124,6 @@ def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     for column in company_source_columns:
         if column in working.columns:
             working[column] = working[column].replace("", pd.NA).ffill().fillna("")
-    return working
 
 
 def _company_from_website(website_url: str) -> str:
@@ -122,6 +135,14 @@ def _company_from_website(website_url: str) -> str:
     return " ".join(part.capitalize() for part in stem.split())
 
 
+def _row_original_columns(row: pd.Series) -> dict[str, str]:
+    return {
+        str(column).strip(): " ".join(str(row.get(column, "") or "").replace("\r", " ").replace("\n", " ").split())
+        for column in row.index
+        if str(column).strip()
+    }
+
+
 def load_leads(
     csv_path: str | Path,
     default_campaign_context: str = "",
@@ -131,7 +152,9 @@ def load_leads(
     if not path.exists():
         raise FileNotFoundError(f"Input CSV not found: {path}")
 
-    df = _prepare_dataframe(pd.read_csv(path, dtype=str).fillna(""))
+    raw_df = _clean_dataframe(pd.read_csv(path, dtype=str).fillna(""))
+    _fill_down_company_context(raw_df)
+    df = _prepare_dataframe(raw_df)
     has_standard_columns = all(column in df.columns for column in REQUIRED_COLUMNS)
     has_client_columns = "Organization Name" in df.columns and "Website" in df.columns
     has_alias_columns = "company_name" in df.columns and "website_url" in df.columns
@@ -157,6 +180,7 @@ def load_leads(
             errors.append("company_name is required")
 
         campaign_context = _first_present(row, ["campaign_context"]) or default_campaign_context
+        original_row = raw_df.iloc[index] if index < len(raw_df) else row
         lead = LeadInput(
             company_name=company_name,
             website_url=website_url,
@@ -176,6 +200,7 @@ def load_leads(
             competitor_context=_first_present(row, ["competitor_context", "Competitor Context"]),
             is_valid=not errors,
             validation_errors=errors,
+            original_columns=_row_original_columns(original_row),
         )
 
         if lead.is_valid and deduplicate:

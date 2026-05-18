@@ -65,10 +65,11 @@ def local_personalization_flags(draft: PersonalizationDraft, evidence: EvidenceR
         flags.append("opening_line_too_long")
     if not draft.evidence_used_for_copy:
         flags.append("missing_evidence_used_for_copy")
+    if "i downloaded" in line_lower or "downloaded the" in line_lower or "i installed" in line_lower:
+        flags.append("download_claim")
     if draft.opening_line and not (
         line_lower.startswith("i was ")
         or line_lower.startswith("i just ")
-        or line_lower.startswith("i downloaded ")
         or line_lower.startswith("i opened ")
         or line_lower.startswith("i checked ")
         or line_lower.startswith("i had a look ")

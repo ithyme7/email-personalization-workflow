@@ -9,6 +9,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from input_loader import load_leads
+from batch_runner import _base_row
 
 
 def test_client_sheet_alias_columns_with_trailing_spaces() -> None:
@@ -35,6 +36,8 @@ def test_client_sheet_alias_columns_with_trailing_spaces() -> None:
     assert leads[0].recipient_name == "Helen Egger"
     assert leads[0].recipient_role == "Co-Founder"
     assert leads[0].app_store_url.startswith("https://play.google.com")
+    assert leads[0].original_columns["Company Name"] == "Little Otter"
+    assert _base_row(leads[0])["input__Email"] == "helen@example.com"
 
 
 if __name__ == "__main__":

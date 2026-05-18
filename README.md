@@ -118,7 +118,9 @@ Before a large batch, run:
 python cli.py --input data/input/sample_companies.csv --output data/output/preflight.xlsx --preflight-only
 ```
 
-This checks whether the output folder is writable, SQLite history can write, optional proxy settings work, the configured API key is reachable, and screenshot OCR is ready when required. Missing API keys are reported clearly; they do not stop research-only mode.
+This checks whether the output folder is writable, SQLite history can write, optional proxy settings work, the configured API key is reachable, screenshot OCR is ready when required, and the Playwright + axe browser detectors can actually run. Missing API keys are reported clearly; they do not stop research-only mode.
+
+If `LIGHTHOUSE_REVIEW` is enabled, the pre-flight check also verifies that `npx` or `npm` is available. A Lighthouse-enabled batch now fails fast when the runner is missing instead of silently exporting rows without Lighthouse evidence.
 
 Optional budget guardrails:
 

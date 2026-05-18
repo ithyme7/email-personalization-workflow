@@ -6,6 +6,7 @@ from typing import Iterable
 
 import requests
 
+from advanced_detectors import check_detector_readiness
 from config import OUTPUT_DIR, Settings, ensure_directories, load_settings
 from llm_client import LLMClient
 from privacy_scan import ocr_available, screenshot_ocr_required
@@ -82,6 +83,18 @@ def _check_ocr() -> PreflightCheck:
     return _warn("Screenshot OCR", detail)
 
 
+def _detector_preflight(settings: Settings) -> list[PreflightCheck]:
+    checks: list[PreflightCheck] = []
+    for readiness in check_detector_readiness(settings):
+        if readiness.status == "ok":
+            checks.append(_ok(readiness.name, readiness.message))
+        elif readiness.status == "fail" and readiness.blocking:
+            checks.append(_fail(readiness.name, readiness.message))
+        else:
+            checks.append(_warn(readiness.name, readiness.message))
+    return checks
+
+
 def run_preflight(
     settings: Settings | None = None,
     output_dir: Path | None = None,
@@ -89,6 +102,7 @@ def run_preflight(
     check_api: bool = True,
     check_proxy: bool = True,
     check_ocr: bool = True,
+    check_detectors: bool = True,
 ) -> list[PreflightCheck]:
     settings = settings or load_settings()
     ensure_directories()
@@ -102,6 +116,8 @@ def run_preflight(
         checks.append(_check_api(settings))
     if check_ocr:
         checks.append(_check_ocr())
+    if check_detectors:
+        checks.extend(_detector_preflight(settings))
     return checks
 
 
