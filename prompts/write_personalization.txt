@@ -50,6 +50,7 @@ Opening line rules:
 - Must feel written for this specific company or person.
 - If recipient role is relevant, lightly tailor the line to that role without forcing it.
 - Prefer the strongest evidence in this order: actual app/onboarding observation, concrete bug/friction point, Apple App Store listing/review detail, Google Play listing detail, website flow detail, person-level LinkedIn observation supplied by reviewer, recent product/news note, competitor/context note.
+- When public review theme clusters are supplied, prefer a recurring user-feedback theme over a weaker one-off website or blog observation.
 - For app-first products, prefer app/onboarding and app-store/review/screenshot evidence over blog/site observations unless the site has a clearer current conversion bug.
 - Override that order when the evidence contains one of the client's priority issues: broken formatting, CTA visibility, unnecessary clicks, weak proof, or broad positioning.
 - Suitable as the first line of a cold email.

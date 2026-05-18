@@ -56,6 +56,7 @@ SERIOUS_QUALITY_FLAGS = {
     "low_confidence_visual_finding",
     "technical_audit_language",
     "download_claim",
+    "company_name_not_lowercase",
 }
 
 
@@ -80,6 +81,7 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "linkedin_source_note": lead.linkedin_source_note,
         "app_store_url": lead.app_store_url,
         "app_store_summary": "",
+        "app_review_themes": "",
         "app_flow_observation": lead.app_flow_observation,
         "app_flow_source_note": lead.app_flow_source_note,
         "screenshot_url": lead.screenshot_url,
@@ -300,6 +302,7 @@ def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[
                 "linkedin_source_note": deep_research.linkedin_source_note,
                 "app_store_url": deep_research.app_store_url,
                 "app_store_summary": deep_research.app_store_summary,
+                "app_review_themes": join_list(deep_research.app_review_themes),
                 "app_flow_observation": deep_research.app_flow_observation,
                 "app_flow_source_note": deep_research.app_flow_source_note,
                 "screenshot_url": deep_research.screenshot_url,
@@ -350,6 +353,8 @@ def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[
         )
     if row.get("product_surface_type") == "app_first_product":
         evidence_parts.insert(0, f"Research priority: {row.get('research_priority')}")
+    if row.get("app_review_themes"):
+        evidence_parts.insert(0, "Public review theme clusters: " + row["app_review_themes"])
     if row.get("app_review_complaints"):
         evidence_parts.insert(0, "Public review complaint signals: " + row["app_review_complaints"])
     if research.ux_validator_findings or research.dead_link_checks:
@@ -590,6 +595,7 @@ def _process_valid_lead(
                 "linkedin_source_note": deep_research.linkedin_source_note,
                 "app_store_url": deep_research.app_store_url,
                 "app_store_summary": deep_research.app_store_summary,
+                "app_review_themes": join_list(deep_research.app_review_themes),
                 "app_flow_observation": deep_research.app_flow_observation,
                 "app_flow_source_note": deep_research.app_flow_source_note,
                 "screenshot_url": deep_research.screenshot_url,

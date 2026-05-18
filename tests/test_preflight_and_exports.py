@@ -8,6 +8,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import client_workspaces
+from client_workspaces import ClientWorkspace, list_client_workspaces, load_client_workspace, save_client_workspace
 from config import Settings
 from export import _client_rows
 from export_mappings import sending_tool_dataframe
@@ -113,9 +115,33 @@ def test_client_review_export_includes_multishot_options() -> None:
     assert row["option_3_line"] == "Option three"
 
 
+def test_client_workspace_roundtrip() -> None:
+    with TemporaryDirectory() as tmp:
+        original_dir = client_workspaces.CLIENT_WORKSPACES_DIR
+        client_workspaces.CLIENT_WORKSPACES_DIR = Path(tmp)
+        try:
+            save_client_workspace(
+                ClientWorkspace(
+                    client_id="William Mathews",
+                    display_name="William Mathews",
+                    tone_profile="friction_first",
+                    default_campaign_context="Context",
+                    default_research_region="us",
+                    default_export_preset="generic",
+                )
+            )
+            loaded = load_client_workspace("william_mathews")
+            assert loaded is not None
+            assert loaded.default_campaign_context == "Context"
+            assert [workspace.client_id for workspace in list_client_workspaces()] == ["william_mathews"]
+        finally:
+            client_workspaces.CLIENT_WORKSPACES_DIR = original_dir
+
+
 if __name__ == "__main__":
     test_preflight_without_api_key_is_not_blocking()
     test_prompt_hashes_are_stable_shape()
     test_sending_tool_mapping_prefers_approved_edit()
     test_client_review_export_includes_multishot_options()
+    test_client_workspace_roundtrip()
     print("preflight_and_export_tests_ok")

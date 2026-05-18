@@ -15,6 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from client_safe_export import create_client_safe_package
+from client_workspaces import ClientWorkspace, list_client_workspaces, load_client_workspace, save_client_workspace, slugify_client_name
 from batch_runner import run
 from config import DATA_DIR, OUTPUT_DIR, load_settings
 from cost_estimator import CostEstimate, estimate_batch_cost, price_for_model
@@ -917,6 +918,69 @@ def _tone_calibration_panel() -> None:
         st.caption(f"It will appear in the tone profile dropdown as `{path.stem}`.")
 
 
+def _client_workspace_panel() -> ClientWorkspace | None:
+    st.subheader("Client workspace")
+    workspaces = list_client_workspaces()
+    labels = ["No saved client workspace"] + [f"{workspace.display_name} ({workspace.client_id})" for workspace in workspaces]
+    selected = st.selectbox("Workspace", labels, key="client_workspace_selector")
+    workspace = None
+    if selected != labels[0]:
+        selected_id = selected.rsplit("(", 1)[-1].rstrip(")")
+        workspace = load_client_workspace(selected_id)
+        if workspace:
+            st.session_state["active_client_workspace"] = workspace.client_id
+            if workspace.tone_profile:
+                st.session_state["preferred_tone_profile"] = workspace.tone_profile
+            st.caption(
+                f"Defaults: tone `{workspace.tone_profile}`, region `{workspace.default_research_region}`, export `{workspace.default_export_preset}`."
+            )
+
+    with st.expander("Create/update client workspace"):
+        default_name = workspace.display_name if workspace else "William Mathews"
+        display_name = st.text_input("Client name", value=default_name, key="workspace_display_name")
+        workspace_id = slugify_client_name(display_name)
+        tone_options = available_tone_profiles()
+        current_tone = workspace.tone_profile if workspace and workspace.tone_profile in tone_options else st.session_state.get("preferred_tone_profile", "friction_first")
+        tone_index = tone_options.index(current_tone) if current_tone in tone_options else 0
+        tone_profile = st.selectbox("Default tone profile", tone_options, index=tone_index, key="workspace_tone_profile")
+        default_context = st.text_area(
+            "Default campaign context",
+            value=(workspace.default_campaign_context if workspace else DEFAULT_CONTEXT),
+            height=80,
+            key="workspace_default_context",
+        )
+        default_region = st.selectbox(
+            "Default research region",
+            ["us", "uk", "nl", "ca", "au", "de"],
+            index=["us", "uk", "nl", "ca", "au", "de"].index(workspace.default_research_region) if workspace and workspace.default_research_region in {"us", "uk", "nl", "ca", "au", "de"} else 0,
+            key="workspace_default_region",
+        )
+        export_preset = st.selectbox(
+            "Default export preset",
+            preset_names(),
+            index=preset_names().index(workspace.default_export_preset) if workspace and workspace.default_export_preset in preset_names() else 0,
+            key="workspace_export_preset",
+        )
+        notes = st.text_area("Client notes", value=(workspace.notes if workspace else ""), height=80, key="workspace_notes")
+        if st.button("Save workspace", use_container_width=True):
+            saved = ClientWorkspace(
+                client_id=workspace_id,
+                display_name=display_name,
+                tone_profile=tone_profile,
+                default_campaign_context=default_context,
+                default_research_region=default_region,
+                default_export_preset=export_preset,
+                notes=notes,
+                created_at=workspace.created_at if workspace else "",
+            )
+            path = save_client_workspace(saved)
+            st.session_state["preferred_tone_profile"] = tone_profile
+            st.session_state["active_client_workspace"] = saved.client_id
+            st.success(f"Saved client workspace: {path}")
+            workspace = saved
+    return workspace
+
+
 def _history_panel() -> None:
     st.subheader("Batch history")
     history = load_run_history()
@@ -1028,6 +1092,7 @@ def main() -> None:
     with setup_tab:
         left, right = st.columns([1.05, 0.95], gap="large")
         with left:
+            workspace = _client_workspace_panel()
             st.subheader("1. Input")
             input_source = st.radio("Lead source", ["CSV upload", "Google Sheets", "Demo sample"], horizontal=True)
             input_path: Path | None = None
@@ -1058,10 +1123,13 @@ def main() -> None:
                     st.error(f"Sample file not found: {SAMPLE_INPUT_PATH}")
 
             st.subheader("2. Campaign context")
+            if workspace and workspace.default_campaign_context and "campaign_context" not in st.session_state:
+                st.session_state["campaign_context"] = workspace.default_campaign_context
             campaign_context = st.text_area(
                 "Sentence after the personalized line",
-                value=DEFAULT_CONTEXT,
+                value=st.session_state.get("campaign_context", DEFAULT_CONTEXT),
                 height=95,
+                key="campaign_context",
             )
 
             st.subheader("3. Tone")

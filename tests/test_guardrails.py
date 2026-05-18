@@ -9,8 +9,9 @@ from config import Settings
 from deliverability import deliverability_flags
 from grounding import grounding_flags
 from llm_client import LLMBudgetExceeded, LLMClient
-from models import EvidenceFact, EvidenceResult, PersonalizationDraft
-from copy_guardrails import local_personalization_flags
+from models import EvidenceFact, EvidenceResult, LeadInput, PersonalizationDraft
+from copy_guardrails import local_personalization_flags, sanitize_personalization_draft
+from deep_research import _cluster_review_themes
 
 
 def _settings(**overrides) -> Settings:
@@ -89,9 +90,38 @@ def test_download_claim_is_flagged() -> None:
     assert "download_claim" in flags
 
 
+def test_sanitizer_replaces_download_claim_and_lowercases_brand() -> None:
+    lead = LeadInput(company_name="Rosebud", website_url="https://rosebud.app")
+    draft = PersonalizationDraft(
+        opening_line="I downloaded the Rosebud app and saw signup friction that could hurt activation.",
+        tailored_insight="Rosebud should review the flow.",
+        chosen_angle="Rosebud signup friction",
+        evidence_used_for_copy=["Rosebud listing mentions signup."],
+    )
+    cleaned = sanitize_personalization_draft(draft, lead)
+    assert "downloaded" not in cleaned.opening_line.lower()
+    assert "I opened the rosebud app" in cleaned.opening_line
+    assert "Rosebud" not in cleaned.tailored_insight
+
+
+def test_review_complaints_are_clustered_into_user_feedback_themes() -> None:
+    themes = _cluster_review_themes(
+        [
+            "Apple review (1 stars): Paywall appears before I understand the app and the subscription is confusing.",
+            "Apple review (2 stars): Login does not work and I cannot access my account.",
+            "Apple review (3 stars): The app crashed during signup.",
+        ]
+    )
+    assert any("pricing/paywall friction" in theme for theme in themes)
+    assert any("login/signup/access friction" in theme for theme in themes)
+    assert any("bugs/crashes/stability" in theme for theme in themes)
+
+
 if __name__ == "__main__":
     test_budget_circuit_breaker_blocks_before_api_call()
     test_deliverability_flags_html_and_spam()
     test_grounding_flags_unsupported_line()
     test_download_claim_is_flagged()
+    test_sanitizer_replaces_download_claim_and_lowercases_brand()
+    test_review_complaints_are_clustered_into_user_feedback_themes()
     print("guardrail_tests_ok")

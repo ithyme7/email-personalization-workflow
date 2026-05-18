@@ -46,6 +46,7 @@ Rules:
 - Blog facts should almost never be the selected angle when any website/app/visual/proof friction exists.
 - For app-first companies, prefer app experience evidence when the supplied website text mentions the app, onboarding, booking, signups, assessments, sessions, subscriptions, or user flows.
 - For app-first companies, do not choose a blog or generic website observation if there is any specific Apple App Store, Google Play, screenshot, review complaint, onboarding, signup, paywall, subscription, access-code, or permission evidence.
+- If public review theme clusters are supplied, treat recurring review themes as stronger user-feedback evidence than generic website copy. Prefer themes tied to pricing/paywall friction, login/signup/access friction, bugs/crashes, onboarding confusion, retention issues, or trust/support issues.
 - Treat manual app/onboarding observations and app-store listing details as high-value evidence when they are specific and source-noted.
 - Treat LinkedIn observations as person-level evidence only when supplied by the reviewer. Do not scrape or infer LinkedIn content.
 - Use recent news/product update notes only when supplied or present in website research text.

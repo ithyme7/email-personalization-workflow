@@ -3,6 +3,7 @@ from __future__ import annotations
 from llm_client import LLMClient, LLMError, load_prompt
 from models import EvidenceResult, LeadInput, PersonalizationDraft, ToneProfile
 from evidence_extractor import evidence_to_payload
+from copy_guardrails import sanitize_personalization_draft
 
 
 def write_personalization(
@@ -60,9 +61,10 @@ def write_personalization(
             evidence_used_for_copy=[f"LLM generation failed: {exc}"],
         )
 
-    return PersonalizationDraft(
+    draft = PersonalizationDraft(
         opening_line=str(raw.get("opening_line", "")).strip(),
         tailored_insight=str(raw.get("tailored_insight", "")).strip(),
         chosen_angle=str(raw.get("chosen_angle", "")).strip(),
         evidence_used_for_copy=[str(value).strip() for value in raw.get("evidence_used_for_copy", []) if str(value).strip()],
     )
+    return sanitize_personalization_draft(draft, lead)

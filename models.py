@@ -30,6 +30,7 @@ OUTPUT_COLUMNS = [
     "linkedin_source_note",
     "app_store_url",
     "app_store_summary",
+    "app_review_themes",
     "app_flow_observation",
     "app_flow_source_note",
     "screenshot_url",
@@ -163,6 +164,7 @@ class ToneProfile:
 class DeepResearchResult:
     app_store_url: str = ""
     app_store_summary: str = ""
+    app_review_themes: list[str] = field(default_factory=list)
     linkedin_observation: str = ""
     linkedin_source_note: str = ""
     app_flow_observation: str = ""
@@ -184,6 +186,8 @@ class DeepResearchResult:
             sections.append(f"LinkedIn source note: {self.linkedin_source_note}")
         if self.app_store_summary:
             sections.append(f"Public app-store or app listing evidence: {self.app_store_summary}")
+        if self.app_review_themes:
+            sections.append("Public review theme clusters: " + " | ".join(self.app_review_themes))
         if self.app_flow_observation:
             sections.append(f"Manual app/onboarding observation supplied by reviewer: {self.app_flow_observation}")
         if self.app_flow_source_note:

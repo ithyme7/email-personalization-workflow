@@ -24,6 +24,7 @@ OUTPUT_DIR = DATA_DIR / "output"
 CACHE_DIR = DATA_DIR / "cache"
 SCREENSHOT_DIR = DATA_DIR / "screenshots"
 CUSTOM_TONE_PROFILES_DIR = DATA_DIR / "custom_tone_profiles"
+CLIENT_WORKSPACES_DIR = DATA_DIR / "client_workspaces"
 PROMPTS_DIR = RESOURCE_DIR / "prompts"
 TONE_PROFILES_DIR = RESOURCE_DIR / "tone_profiles"
 
@@ -154,5 +155,5 @@ def load_settings() -> Settings:
 
 
 def ensure_directories() -> None:
-    for directory in [DATA_DIR, INPUT_DIR, OUTPUT_DIR, CACHE_DIR, SCREENSHOT_DIR, CUSTOM_TONE_PROFILES_DIR]:
+    for directory in [DATA_DIR, INPUT_DIR, OUTPUT_DIR, CACHE_DIR, SCREENSHOT_DIR, CUSTOM_TONE_PROFILES_DIR, CLIENT_WORKSPACES_DIR]:
         directory.mkdir(parents=True, exist_ok=True)

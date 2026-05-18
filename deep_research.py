@@ -38,6 +38,69 @@ COMPLAINT_TERMS = {
     "permission",
 }
 
+REVIEW_THEME_TERMS = {
+    "pricing/paywall friction": {
+        "paywall",
+        "price",
+        "pricing",
+        "subscription",
+        "trial",
+        "payment",
+        "charged",
+        "refund",
+        "expensive",
+    },
+    "login/signup/access friction": {
+        "login",
+        "log in",
+        "sign in",
+        "signup",
+        "sign up",
+        "account",
+        "access code",
+        "password",
+        "verify",
+    },
+    "bugs/crashes/stability": {
+        "crash",
+        "bug",
+        "broken",
+        "doesn't work",
+        "not working",
+        "stuck",
+        "freeze",
+        "frozen",
+        "error",
+    },
+    "onboarding/confusion": {
+        "confusing",
+        "unclear",
+        "hard to use",
+        "complicated",
+        "onboarding",
+        "tutorial",
+        "where to start",
+    },
+    "notifications/retention friction": {
+        "notification",
+        "notifications",
+        "reminder",
+        "too many",
+        "spam",
+        "daily",
+        "streak",
+    },
+    "support/trust friction": {
+        "support",
+        "customer service",
+        "help",
+        "response",
+        "trust",
+        "privacy",
+        "data",
+    },
+}
+
 
 def _app_store_rank(url: str) -> tuple[int, str]:
     normalized = str(url or "").lower()
@@ -162,6 +225,22 @@ def _fetch_apple_review_complaints(app_store_url: str, settings: Settings) -> li
     return complaints
 
 
+def _cluster_review_themes(complaints: list[str]) -> list[str]:
+    counts: dict[str, int] = {}
+    examples: dict[str, str] = {}
+    for complaint in complaints:
+        lower = complaint.lower()
+        for theme, terms in REVIEW_THEME_TERMS.items():
+            if any(term in lower for term in terms):
+                counts[theme] = counts.get(theme, 0) + 1
+                examples.setdefault(theme, complaint[:180])
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [
+        f"{theme}: {count} public review signal(s), e.g. {examples[theme]}"
+        for theme, count in ranked[:4]
+    ]
+
+
 def _build_friction_checklist(lead: LeadInput, app_store_summary: str) -> list[str]:
     combined = " ".join(
         [
@@ -234,11 +313,18 @@ def collect_deep_research(lead: LeadInput, settings: Settings) -> DeepResearchRe
 
     result.app_store_summary = "\n\n".join(app_summaries)
     if result.review_complaints:
+        result.app_review_themes = _cluster_review_themes(result.review_complaints)
         result.app_store_summary = (
             result.app_store_summary
             + "\n\nPublic review complaint signals:\n"
             + "\n".join(f"- {complaint}" for complaint in result.review_complaints)
         ).strip()
+        if result.app_review_themes:
+            result.app_store_summary = (
+                result.app_store_summary
+                + "\n\nPublic review theme clusters:\n"
+                + "\n".join(f"- {theme}" for theme in result.app_review_themes)
+            ).strip()
     result.friction_checklist = _build_friction_checklist(lead, result.app_store_summary)
 
     return result

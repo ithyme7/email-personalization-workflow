@@ -8,6 +8,8 @@ SEVERE_QUALITY_FLAGS = {
     "unsupported_claim",
     "hallucination",
     "em_dash",
+    "download_claim",
+    "company_name_not_lowercase",
     "invalid_json",
     "html_in_personalization_line",
 }

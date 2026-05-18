@@ -5,6 +5,7 @@ import logging
 import os
 
 from batch_runner import ProgressCallback, run
+from client_workspaces import load_client_workspace
 from config import load_settings
 from preflight import has_blocking_failures, preflight_summary, run_preflight
 
@@ -57,6 +58,11 @@ def parse_args() -> argparse.Namespace:
         help="Research/App Store region code such as us, uk, nl, ca, au, or de. Uses App Store country plus browser locale/timezone hints.",
     )
     parser.add_argument(
+        "--client-workspace",
+        default="",
+        help="Optional saved client workspace id. Applies default campaign context, tone profile, and research region when not supplied.",
+    )
+    parser.add_argument(
         "--sending-tool-preset",
         default="",
         choices=["", "generic", "lemlist", "instantly", "smartlead"],
@@ -73,6 +79,15 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     parsed_args = parse_args()
+    if parsed_args.client_workspace:
+        workspace = load_client_workspace(parsed_args.client_workspace)
+        if workspace:
+            if not parsed_args.campaign_context.strip() and workspace.default_campaign_context:
+                parsed_args.campaign_context = workspace.default_campaign_context
+            if not parsed_args.tone_profile.strip() and workspace.tone_profile:
+                parsed_args.tone_profile = workspace.tone_profile
+            if not parsed_args.research_region.strip() and workspace.default_research_region:
+                parsed_args.research_region = workspace.default_research_region
     if parsed_args.research_region:
         os.environ["RESEARCH_REGION"] = parsed_args.research_region.strip().lower()
     logging.basicConfig(level=parsed_args.log_level, format="%(levelname)s: %(message)s")

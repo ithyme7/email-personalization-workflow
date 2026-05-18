@@ -159,6 +159,28 @@ BROWSER_TIMEZONE=America/New_York
 
 `PERSONALIZATION_OPTIONS` controls how many opener options are generated per lead, capped at three. `RESEARCH_REGION` controls Apple review country plus browser locale/timezone hints. True IP-based regional research still requires a legitimate proxy or VPN through `BROWSER_PROXY_URL`.
 
+## Client Workspaces
+
+The app supports lightweight local client workspaces under `data/client_workspaces/`.
+
+A workspace stores:
+
+- default tone profile
+- default campaign context
+- default research region
+- default export preset
+- client-specific notes
+
+This is intentionally local and simple. It is meant to help switch between clients without mixing tone rules, context, and delivery preferences.
+
+CLI example:
+
+```bash
+python cli.py --client-workspace william_mathews --input data/input/leads.csv --output data/output/william_batch.xlsx
+```
+
+If the workspace has defaults, the CLI uses them when campaign context, tone profile, or research region are not supplied directly.
+
 ## Screenshot OCR Privacy Check
 
 Client-safe screenshot delivery is strict by default. `REQUIRE_SCREENSHOT_OCR=true` means screenshots are only included when OCR can scan them for PII.
