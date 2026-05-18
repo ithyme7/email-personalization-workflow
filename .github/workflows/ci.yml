@@ -40,3 +40,6 @@ jobs:
       - name: Run preflight and export mapping tests
         run: |
           python tests/test_preflight_and_exports.py
+      - name: Run input loader alias tests
+        run: |
+          python tests/test_input_loader_aliases.py

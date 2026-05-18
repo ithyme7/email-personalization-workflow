@@ -28,6 +28,21 @@ OPTIONAL_COLUMNS = [
 ]
 ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
 
+CLIENT_COLUMN_ALIASES = {
+    "Company Name": "company_name",
+    "Website": "website_url",
+    "Linkedin": "linkedin_url",
+    "LinkedIn": "linkedin_url",
+    "App Store": "app_store_url",
+    "Google Play": "app_store_url",
+    "First Name": "recipient_name",
+    "Person Name": "recipient_name",
+    "Job Title": "recipient_role",
+    "Job Tile": "recipient_role",
+    "Role": "recipient_role",
+    "Email": "optional_notes",
+}
+
 
 def normalize_url(value: str) -> tuple[str, str | None]:
     raw = str(value or "").strip()
@@ -54,21 +69,35 @@ def dedupe_key(lead: LeadInput) -> str:
 
 def _first_present(row: pd.Series, candidates: list[str]) -> str:
     for candidate in candidates:
-        if candidate in row.index and str(row.get(candidate, "")).strip() not in {"", "—"}:
-            return str(row.get(candidate, "")).strip()
+        value = str(row.get(candidate, "")).replace("\r", " ").replace("\n", " ").strip()
+        if candidate in row.index and value not in {"", "—"}:
+            return " ".join(value.split())
     return ""
 
 
 def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     working = df.copy()
+    working.columns = [str(column).strip() for column in working.columns]
+    rename_map = {
+        column: CLIENT_COLUMN_ALIASES[column]
+        for column in working.columns
+        if column in CLIENT_COLUMN_ALIASES and CLIENT_COLUMN_ALIASES[column] not in working.columns
+    }
+    if rename_map:
+        working = working.rename(columns=rename_map)
+    working = working.apply(
+        lambda column: column.map(
+            lambda value: str(value).replace("\r", " ").replace("\n", " ").strip() if pd.notna(value) else ""
+        )
+    )
     company_source_columns = [
         "Organization Name",
         "Last Funding Amount",
         "Approx USD Equivalent",
-        "Website",
+        "website_url",
         "Twitter",
         "Facebook",
-        "LinkedIn",
+        "linkedin_url",
         "Contact Email",
         "Number of Articles",
         "Number of Employees",
@@ -84,6 +113,15 @@ def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return working
 
 
+def _company_from_website(website_url: str) -> str:
+    parsed = urlparse(website_url)
+    domain = parsed.netloc.lower().removeprefix("www.")
+    if not domain:
+        return ""
+    stem = domain.split(".")[0].replace("-", " ").replace("_", " ")
+    return " ".join(part.capitalize() for part in stem.split())
+
+
 def load_leads(
     csv_path: str | Path,
     default_campaign_context: str = "",
@@ -96,9 +134,10 @@ def load_leads(
     df = _prepare_dataframe(pd.read_csv(path, dtype=str).fillna(""))
     has_standard_columns = all(column in df.columns for column in REQUIRED_COLUMNS)
     has_client_columns = "Organization Name" in df.columns and "Website" in df.columns
-    if not has_standard_columns and not has_client_columns:
+    has_alias_columns = "company_name" in df.columns and "website_url" in df.columns
+    if not has_standard_columns and not has_client_columns and not has_alias_columns:
         raise ValueError(
-            "Input CSV missing required columns. Use company_name/website_url, or the client sheet columns Organization Name/Website."
+            "Input CSV missing required columns. Use company_name/website_url, or client columns such as Organization Name/Website or Company Name/Website."
         )
 
     for column in OPTIONAL_COLUMNS:
@@ -110,13 +149,12 @@ def load_leads(
 
     for index, row in df.iterrows():
         errors: list[str] = []
-        company_name = _first_present(row, ["company_name", "Organization Name", "Organization Name.1"])
-        if not company_name:
-            errors.append("company_name is required")
-
         website_url, url_error = normalize_url(_first_present(row, ["website_url", "Website"]))
         if url_error:
             errors.append(url_error)
+        company_name = _first_present(row, ["company_name", "Organization Name", "Organization Name.1"]) or _company_from_website(website_url)
+        if not company_name:
+            errors.append("company_name is required")
 
         campaign_context = _first_present(row, ["campaign_context"]) or default_campaign_context
         lead = LeadInput(
@@ -129,7 +167,7 @@ def load_leads(
             optional_notes=_first_present(row, ["optional_notes"]),
             linkedin_observation=_first_present(row, ["linkedin_observation", "LinkedIn Observation"]),
             linkedin_source_note=_first_present(row, ["linkedin_source_note", "LinkedIn Source Note"]),
-            app_store_url=_first_present(row, ["app_store_url", "App Store URL", "Google Play URL"]),
+            app_store_url=_first_present(row, ["app_store_url", "App Store URL", "Google Play URL", "App Store"]),
             app_flow_observation=_first_present(row, ["app_flow_observation", "App Flow Observation", "Manual App Observation"]),
             app_flow_source_note=_first_present(row, ["app_flow_source_note", "App Flow Source Note"]),
             screenshot_url=_first_present(row, ["screenshot_url", "Screenshot URL", "Screenshot"]),
