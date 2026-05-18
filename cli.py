@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 
 from batch_runner import ProgressCallback, run
 from config import load_settings
@@ -51,6 +52,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip filesystem/SQLite/proxy pre-flight checks before running the batch.",
     )
     parser.add_argument(
+        "--research-region",
+        default="",
+        help="Research/App Store region code such as us, uk, nl, ca, au, or de. Uses App Store country plus browser locale/timezone hints.",
+    )
+    parser.add_argument(
         "--sending-tool-preset",
         default="",
         choices=["", "generic", "lemlist", "instantly", "smartlead"],
@@ -67,6 +73,8 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     parsed_args = parse_args()
+    if parsed_args.research_region:
+        os.environ["RESEARCH_REGION"] = parsed_args.research_region.strip().lower()
     logging.basicConfig(level=parsed_args.log_level, format="%(levelname)s: %(message)s")
     if parsed_args.preflight_only:
         checks = run_preflight(load_settings())

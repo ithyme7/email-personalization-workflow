@@ -11,6 +11,9 @@ def write_personalization(
     evidence: EvidenceResult,
     tone_profile: ToneProfile | None = None,
     previous_failure_reasons: list[str] | None = None,
+    variant_index: int = 1,
+    avoid_opening_lines: list[str] | None = None,
+    variant_instruction: str = "",
 ) -> PersonalizationDraft:
     prompt = load_prompt("write_personalization.txt")
     next_sentence = lead.campaign_context.strip() or "We help mobile app teams with this type of work, figure out where users drop off and why."
@@ -43,6 +46,9 @@ def write_personalization(
         "possible_angles": evidence.possible_angles,
         "tone_profile": tone_profile.to_prompt_payload() if tone_profile else {},
         "previous_failure_reasons": previous_failure_reasons or [],
+        "variant_index": variant_index,
+        "avoid_opening_lines": avoid_opening_lines or [],
+        "variant_instruction": variant_instruction,
     }
     try:
         raw = client.complete_json(prompt, payload)

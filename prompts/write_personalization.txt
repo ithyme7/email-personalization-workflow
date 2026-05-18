@@ -78,6 +78,7 @@ Tailored insight rules:
 - No em dashes.
 
 If previous_failure_reasons are supplied, fix those issues. Accuracy is more important than cleverness.
+If variant_index, variant_instruction, or avoid_opening_lines are supplied, write a distinct option for that variant. Do not repeat any avoid_opening_lines. Keep the same evidence discipline and QC rules for every option. When possible, make each option focus on a different evidence-backed angle, such as user feedback, onboarding/conversion friction, or proof/positioning friction.
 
 Return this JSON shape:
 {

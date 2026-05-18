@@ -14,7 +14,7 @@ from evidence_extractor import evidence_to_payload, extract_evidence
 from export import export_client_batch_rows, export_rows, export_sending_tool_rows
 from input_loader import dedupe_key, load_leads
 from llm_client import LLMClient
-from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
+from models import EvidenceFact, EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
 from personalization_writer import write_personalization
 from preflight import has_blocking_failures, preflight_summary, run_preflight
 from prompt_versions import prompt_hashes, tone_profile_hash
@@ -27,6 +27,36 @@ from web_research import research_company
 
 PITCH_SENTENCE = "We help mobile app teams with this type of work, figure out where users drop off and why."
 ProgressCallback = Callable[[dict[str, Any]], None]
+SERIOUS_QUALITY_FLAGS = {
+    "em_dash",
+    "genericness",
+    "unsupported_claims",
+    "generic_praise",
+    "too_long",
+    "opening_line_too_long",
+    "ai_mush",
+    "missing_outcome_tie",
+    "poor_pitch_flow",
+    "missing_conversational_template_open",
+    "missing_specific_dropoff_hypothesis",
+    "too_abstract",
+    "not_conversion_focused",
+    "missing_visible_friction",
+    "blog_angle_low_value",
+    "weak_or_vague_proof_angle",
+    "broad_positioning_not_explained",
+    "better_priority_angle_available",
+    "wrong_surface",
+    "multiple_insights",
+    "manual_review_needed",
+    "role_forced",
+    "angle_gate_no_sendable_friction",
+    "selected_angle_not_strong",
+    "app_store_angle_review",
+    "low_confidence_visual_finding",
+    "technical_audit_language",
+    "download_claim",
+}
 
 
 def _emit_progress(progress_callback: ProgressCallback | None, **payload: Any) -> None:
@@ -89,6 +119,33 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "chosen_angle": "",
         "opening_line": "",
         "tailored_insight": "",
+        "opening_line_option_1": "",
+        "tailored_insight_option_1": "",
+        "chosen_angle_option_1": "",
+        "evidence_used_for_copy_option_1": "",
+        "confidence_score_option_1": "",
+        "quality_flags_option_1": "",
+        "needs_manual_review_option_1": "",
+        "reviewer_notes_option_1": "",
+        "template_preview_option_1": "",
+        "opening_line_option_2": "",
+        "tailored_insight_option_2": "",
+        "chosen_angle_option_2": "",
+        "evidence_used_for_copy_option_2": "",
+        "confidence_score_option_2": "",
+        "quality_flags_option_2": "",
+        "needs_manual_review_option_2": "",
+        "reviewer_notes_option_2": "",
+        "template_preview_option_2": "",
+        "opening_line_option_3": "",
+        "tailored_insight_option_3": "",
+        "chosen_angle_option_3": "",
+        "evidence_used_for_copy_option_3": "",
+        "confidence_score_option_3": "",
+        "quality_flags_option_3": "",
+        "needs_manual_review_option_3": "",
+        "reviewer_notes_option_3": "",
+        "template_preview_option_3": "",
         "prompt_set_hash": "",
         "evidence_prompt_hash": "",
         "write_prompt_hash": "",
@@ -356,6 +413,11 @@ def _copy_personalization_for_contact(row: dict[str, Any], lead: LeadInput) -> d
     note = copied.get("reviewer_notes", "")
     copied["reviewer_notes"] = join_list([note, "Reused personalization from duplicate company row"])
     copied["template_preview"] = _template_preview(lead, copied.get("opening_line", ""))
+    for index in range(1, 4):
+        copied[f"template_preview_option_{index}"] = _template_preview(
+            lead,
+            copied.get(f"opening_line_option_{index}", ""),
+        )
     app_check_status, manual_check = _manual_check_recommendation(lead, copied)
     copied["app_check_status"] = app_check_status
     copied["recommended_manual_check"] = manual_check
@@ -406,6 +468,102 @@ def _evidence_strength_score(evidence: EvidenceResult) -> int:
         elif fact.strength == "medium":
             score += 1
     return max(1, min(5, score)) if evidence.facts else 0
+
+
+def _variant_evidence(evidence: EvidenceResult, fact: EvidenceFact, allowed_facts: list[EvidenceFact]) -> EvidenceResult:
+    supporting_facts = [
+        candidate
+        for candidate in allowed_facts
+        if candidate is not fact
+        and (
+            candidate.friction_type == fact.friction_type
+            or candidate.conversion_outcome == fact.conversion_outcome
+            or candidate.surface_checked == fact.surface_checked
+        )
+    ]
+    selected_facts = [fact] + supporting_facts[:1]
+    selected_angles = [
+        f"{candidate.friction_type}: {candidate.fact} Outcome: {candidate.conversion_outcome}".strip()
+        for candidate in selected_facts
+    ]
+    return EvidenceResult(
+        facts=selected_facts,
+        possible_angles=selected_angles,
+        needs_manual_review=evidence.needs_manual_review,
+        reviewer_notes=evidence.reviewer_notes,
+        raw=evidence.raw,
+    )
+
+
+def _write_and_qc_variant(
+    client: LLMClient,
+    lead: LeadInput,
+    evidence: EvidenceResult,
+    tone_profile,
+    variant_index: int,
+    avoid_opening_lines: list[str],
+    variant_instruction: str,
+) -> tuple[PersonalizationDraft, QCResult]:
+    draft = write_personalization(
+        client,
+        lead,
+        evidence,
+        tone_profile,
+        variant_index=variant_index,
+        avoid_opening_lines=avoid_opening_lines,
+        variant_instruction=variant_instruction,
+    )
+    qc = check_quality(client, lead, evidence, draft, tone_profile)
+    if not qc.passed:
+        rewrite_reasons = qc.reasons + qc.quality_flags
+        rewritten = write_personalization(
+            client,
+            lead,
+            evidence,
+            tone_profile,
+            previous_failure_reasons=rewrite_reasons,
+            variant_index=variant_index,
+            avoid_opening_lines=avoid_opening_lines + [draft.opening_line],
+            variant_instruction=variant_instruction,
+        )
+        rewritten_qc = check_quality(client, lead, evidence, rewritten, tone_profile)
+        if rewritten_qc.score >= qc.score:
+            return rewritten, rewritten_qc
+    return draft, qc
+
+
+def _store_variant(
+    row: dict[str, Any],
+    lead: LeadInput,
+    index: int,
+    draft: PersonalizationDraft,
+    qc: QCResult,
+    needs_review: bool,
+) -> None:
+    row[f"opening_line_option_{index}"] = draft.opening_line
+    row[f"tailored_insight_option_{index}"] = draft.tailored_insight
+    row[f"chosen_angle_option_{index}"] = draft.chosen_angle
+    row[f"evidence_used_for_copy_option_{index}"] = join_list(draft.evidence_used_for_copy)
+    row[f"confidence_score_option_{index}"] = qc.score
+    row[f"quality_flags_option_{index}"] = join_list(qc.quality_flags)
+    row[f"needs_manual_review_option_{index}"] = needs_review
+    row[f"reviewer_notes_option_{index}"] = join_list(qc.reasons)
+    row[f"template_preview_option_{index}"] = _template_preview(lead, draft.opening_line)
+
+
+def _best_variant_index(variants: list[tuple[int, PersonalizationDraft, QCResult, bool]]) -> int:
+    if not variants:
+        return 0
+    ordered = sorted(
+        variants,
+        key=lambda item: (
+            item[3],
+            -item[2].score,
+            bool(SERIOUS_QUALITY_FLAGS.intersection(set(item[2].quality_flags))),
+            item[0],
+        ),
+    )
+    return ordered[0][0]
 
 
 def _process_valid_lead(
@@ -535,67 +693,56 @@ def _process_valid_lead(
         row["recommended_manual_check"] = manual_check
         return row
 
-    draft = write_personalization(client, lead, gated_evidence, tone_profile)
-    qc = check_quality(client, lead, gated_evidence, draft, tone_profile)
-
-    if not qc.passed:
-        rewrite_reasons = qc.reasons + qc.quality_flags
-        rewritten = write_personalization(
+    variant_facts = selection.allowed_facts[: client.settings.personalization_options]
+    while variant_facts and len(variant_facts) < client.settings.personalization_options:
+        variant_facts.append(variant_facts[-1])
+    variants: list[tuple[int, PersonalizationDraft, QCResult, bool]] = []
+    avoid_opening_lines: list[str] = []
+    variant_instructions = [
+        "Option 1: choose the strongest sendable friction angle.",
+        "Option 2: choose a meaningfully different angle if evidence allows, ideally user feedback, app-store review, onboarding, or conversion friction.",
+        "Option 3: choose another distinct angle if evidence allows, ideally proof, positioning, CTA, website, or visual friction.",
+    ]
+    for variant_index, fact in enumerate(variant_facts[: client.settings.personalization_options], 1):
+        variant_evidence = _variant_evidence(evidence, fact, selection.allowed_facts)
+        draft, qc = _write_and_qc_variant(
             client,
             lead,
-            gated_evidence,
+            variant_evidence,
             tone_profile,
-            previous_failure_reasons=rewrite_reasons,
+            variant_index,
+            avoid_opening_lines,
+            variant_instructions[min(variant_index - 1, len(variant_instructions) - 1)],
         )
-        rewritten_qc = check_quality(client, lead, gated_evidence, rewritten, tone_profile)
-        if rewritten_qc.score >= qc.score:
-            draft = rewritten
-            qc = rewritten_qc
+        variant_flags = set(selection.quality_flags).union(qc.quality_flags)
+        variant_needs_review = (
+            research.needs_manual_review
+            or variant_evidence.needs_manual_review
+            or selection.needs_manual_review
+            or not qc.passed
+            or qc.score < 8
+            or bool(SERIOUS_QUALITY_FLAGS.intersection(variant_flags))
+        )
+        _store_variant(row, lead, variant_index, draft, qc, variant_needs_review)
+        variants.append((variant_index, draft, qc, variant_needs_review))
+        if draft.opening_line:
+            avoid_opening_lines.append(draft.opening_line)
 
-    serious_quality_flags = {
-        "em_dash",
-        "genericness",
-        "unsupported_claims",
-        "generic_praise",
-        "too_long",
-        "opening_line_too_long",
-        "ai_mush",
-        "missing_outcome_tie",
-        "poor_pitch_flow",
-        "missing_conversational_template_open",
-        "missing_specific_dropoff_hypothesis",
-        "too_abstract",
-        "not_conversion_focused",
-        "missing_visible_friction",
-        "blog_angle_low_value",
-        "weak_or_vague_proof_angle",
-        "broad_positioning_not_explained",
-        "better_priority_angle_available",
-        "wrong_surface",
-        "multiple_insights",
-        "manual_review_needed",
-        "role_forced",
-        "angle_gate_no_sendable_friction",
-        "selected_angle_not_strong",
-        "app_store_angle_review",
-        "low_confidence_visual_finding",
-        "technical_audit_language",
-        "download_claim",
-    }
+    best_index = _best_variant_index(variants)
+    if best_index == 0:
+        draft = PersonalizationDraft()
+        qc = QCResult(score=0, passed=False, reasons=["No personalization options were generated"], quality_flags=["manual_review_needed"])
+        needs_review = True
+    else:
+        _, draft, qc, needs_review = next(item for item in variants if item[0] == best_index)
+
     existing_flags = {
         flag.strip()
         for flag in str(row.get("quality_flags", "")).replace(";", "|").split("|")
         if flag.strip()
     }
     combined_flags = existing_flags.union(set(selection.quality_flags)).union(set(qc.quality_flags))
-    needs_review = (
-        research.needs_manual_review
-        or gated_evidence.needs_manual_review
-        or selection.needs_manual_review
-        or not qc.passed
-        or qc.score < 8
-        or bool(serious_quality_flags.intersection(combined_flags))
-    )
+    needs_review = needs_review or bool(SERIOUS_QUALITY_FLAGS.intersection(combined_flags))
 
     notes = research.reviewer_notes + evidence.reviewer_notes + selection.reviewer_notes + qc.reasons
     row.update(

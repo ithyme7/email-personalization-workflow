@@ -27,6 +27,16 @@ CUSTOM_TONE_PROFILES_DIR = DATA_DIR / "custom_tone_profiles"
 PROMPTS_DIR = RESOURCE_DIR / "prompts"
 TONE_PROFILES_DIR = RESOURCE_DIR / "tone_profiles"
 
+REGION_CONFIG = {
+    "us": {"country": "us", "locale": "en-US", "timezone": "America/New_York"},
+    "uk": {"country": "gb", "locale": "en-GB", "timezone": "Europe/London"},
+    "gb": {"country": "gb", "locale": "en-GB", "timezone": "Europe/London"},
+    "nl": {"country": "nl", "locale": "nl-NL", "timezone": "Europe/Amsterdam"},
+    "ca": {"country": "ca", "locale": "en-CA", "timezone": "America/Toronto"},
+    "au": {"country": "au", "locale": "en-AU", "timezone": "Australia/Sydney"},
+    "de": {"country": "de", "locale": "de-DE", "timezone": "Europe/Berlin"},
+}
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -50,6 +60,11 @@ class Settings:
     tone_profile: str
     max_batch_cost_usd: float
     max_llm_calls_per_batch: int
+    personalization_options: int = 3
+    research_region: str = "us"
+    app_store_country: str = "us"
+    browser_locale: str = "en-US"
+    browser_timezone: str = "America/New_York"
 
     @property
     def has_openai_key(self) -> bool:
@@ -104,6 +119,11 @@ def load_settings() -> Settings:
         default_model = "gemini-3.1-flash-lite"
     else:
         default_model = "gpt-4o-mini"
+    region = os.getenv("RESEARCH_REGION", os.getenv("APP_STORE_COUNTRY", "us")).strip().lower() or "us"
+    region_settings = REGION_CONFIG.get(region, REGION_CONFIG["us"])
+    app_store_country = os.getenv("APP_STORE_COUNTRY", region_settings["country"]).strip().lower() or region_settings["country"]
+    browser_locale = os.getenv("BROWSER_LOCALE", region_settings["locale"]).strip() or region_settings["locale"]
+    browser_timezone = os.getenv("BROWSER_TIMEZONE", region_settings["timezone"]).strip() or region_settings["timezone"]
     return Settings(
         llm_provider=provider,
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
@@ -125,6 +145,11 @@ def load_settings() -> Settings:
         tone_profile=os.getenv("TONE_PROFILE", "friction_first").strip() or "friction_first",
         max_batch_cost_usd=max(0.0, _float_env("MAX_BATCH_COST_USD", 0.0)),
         max_llm_calls_per_batch=max(0, _int_env("MAX_LLM_CALLS_PER_BATCH", 0)),
+        personalization_options=max(1, min(3, _int_env("PERSONALIZATION_OPTIONS", 3))),
+        research_region=region,
+        app_store_country=app_store_country,
+        browser_locale=browser_locale,
+        browser_timezone=browser_timezone,
     )
 
 

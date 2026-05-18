@@ -53,6 +53,13 @@ def _cache_path(url: str) -> Path:
     return CACHE_DIR / f"{digest}.json"
 
 
+def _headers(settings: Settings) -> dict[str, str]:
+    return {
+        "User-Agent": "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)",
+        "Accept-Language": f"{settings.browser_locale},en;q=0.8",
+    }
+
+
 def _clean_text(html: str) -> tuple[str, str]:
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else ""
@@ -74,7 +81,7 @@ def _fetch_public_text(url: str, settings: Settings) -> tuple[str, str] | None:
     try:
         response = requests.get(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)"},
+            headers=_headers(settings),
             timeout=settings.request_timeout_seconds,
         )
         if response.status_code >= 400:
@@ -96,7 +103,7 @@ def _discover_app_store_links(lead: LeadInput, settings: Settings) -> list[str]:
     try:
         response = requests.get(
             lead.website_url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)"},
+            headers=_headers(settings),
             timeout=settings.request_timeout_seconds,
         )
         if response.status_code >= 400:
@@ -122,12 +129,13 @@ def _fetch_apple_review_complaints(app_store_url: str, settings: Settings) -> li
         return []
     parsed = urlparse(app_store_url)
     country_match = re.search(r"apps\.apple\.com/([a-z]{2})/", parsed.netloc + parsed.path)
-    country = country_match.group(1) if country_match else "us"
+    configured_country = str(getattr(settings, "app_store_country", "") or "").strip().lower()
+    country = configured_country if configured_country and configured_country != "auto" else (country_match.group(1) if country_match else "us")
     rss_url = f"https://itunes.apple.com/{country}/rss/customerreviews/id={app_id}/sortBy=mostRecent/json"
     try:
         response = requests.get(
             rss_url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)"},
+            headers=_headers(settings),
             timeout=settings.request_timeout_seconds,
         )
         if response.status_code >= 400:
@@ -222,7 +230,7 @@ def collect_deep_research(lead: LeadInput, settings: Settings) -> DeepResearchRe
             complaints = _fetch_apple_review_complaints(url, settings)
             if complaints:
                 result.review_complaints.extend(complaints)
-                result.source_urls.append(f"Apple public customer reviews for {url}")
+                result.source_urls.append(f"Apple public customer reviews for {settings.app_store_country.upper()} region: {url}")
 
     result.app_store_summary = "\n\n".join(app_summaries)
     if result.review_complaints:

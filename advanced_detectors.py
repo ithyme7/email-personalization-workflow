@@ -10,6 +10,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin
 
 import requests
@@ -129,7 +130,12 @@ def check_detector_readiness(settings: Settings) -> list[DetectorReadiness]:
                 if settings.browser_proxy_url:
                     launch_kwargs["proxy"] = {"server": settings.browser_proxy_url}
                 browser = p.chromium.launch(**launch_kwargs)
-                context_kwargs: dict[str, Any] = {"viewport": {"width": 390, "height": 844}, "is_mobile": True}
+                context_kwargs: dict[str, Any] = {
+                    "viewport": {"width": 390, "height": 844},
+                    "is_mobile": True,
+                    "locale": settings.browser_locale,
+                    "timezone_id": settings.browser_timezone,
+                }
                 if settings.browser_user_agent:
                     context_kwargs["user_agent"] = settings.browser_user_agent
                 context = browser.new_context(**context_kwargs)
@@ -195,6 +201,8 @@ def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> A
                     viewport={"width": viewport["width"], "height": viewport["height"]},
                     is_mobile=bool(viewport["is_mobile"]),
                     device_scale_factor=2 if viewport["is_mobile"] else 1,
+                    locale=settings.browser_locale,
+                    timezone_id=settings.browser_timezone,
                 )
                 if settings.browser_user_agent:
                     context_kwargs["user_agent"] = settings.browser_user_agent

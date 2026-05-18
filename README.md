@@ -122,6 +122,12 @@ This checks whether the output folder is writable, SQLite history can write, opt
 
 If `LIGHTHOUSE_REVIEW` is enabled, the pre-flight check also verifies that `npx` or `npm` is available. A Lighthouse-enabled batch now fails fast when the runner is missing instead of silently exporting rows without Lighthouse evidence.
 
+On Windows, install Node.js LTS if Lighthouse is enabled:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
 Optional budget guardrails:
 
 ```env
@@ -140,6 +146,18 @@ BROWSER_USER_AGENT=
 ```
 
 Leave `BROWSER_PROXY_URL` empty unless you have a legitimate proxy for your own workflow. These settings reduce transient fetch failures and rate-limit noise; they are not intended to bypass access controls.
+
+Optional personalization depth and research region:
+
+```env
+PERSONALIZATION_OPTIONS=3
+RESEARCH_REGION=us
+APP_STORE_COUNTRY=us
+BROWSER_LOCALE=en-US
+BROWSER_TIMEZONE=America/New_York
+```
+
+`PERSONALIZATION_OPTIONS` controls how many opener options are generated per lead, capped at three. `RESEARCH_REGION` controls Apple review country plus browser locale/timezone hints. True IP-based regional research still requires a legitimate proxy or VPN through `BROWSER_PROXY_URL`.
 
 ## Screenshot OCR Privacy Check
 

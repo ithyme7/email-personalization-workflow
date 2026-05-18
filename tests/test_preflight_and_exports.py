@@ -9,6 +9,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import Settings
+from export import _client_rows
 from export_mappings import sending_tool_dataframe
 from preflight import has_blocking_failures, run_preflight
 from prompt_versions import prompt_hashes
@@ -81,8 +82,40 @@ def test_sending_tool_mapping_prefers_approved_edit() -> None:
     assert mapped.loc[0, "icebreaker"] == "Edited sendable line"
 
 
+def test_client_review_export_includes_multishot_options() -> None:
+    review_rows, _ = _client_rows(
+        [
+            {
+                "company_name": "example",
+                "recipient_name": "Jane",
+                "website_url": "https://example.com",
+                "opening_line": "I was checking out the example app and saw one friction point.",
+                "opening_line_option_1": "Option one",
+                "confidence_score_option_1": 9,
+                "quality_flags_option_1": "",
+                "needs_manual_review_option_1": False,
+                "opening_line_option_2": "Option two",
+                "confidence_score_option_2": 8,
+                "quality_flags_option_2": "soft_edit",
+                "needs_manual_review_option_2": True,
+                "opening_line_option_3": "Option three",
+                "confidence_score_option_3": 7,
+                "quality_flags_option_3": "manual_review_needed",
+                "needs_manual_review_option_3": True,
+            }
+        ]
+    )
+    row = review_rows[0]
+    assert row["option_1_line"] == "Option one"
+    assert row["option_1_qc_score"] == 9
+    assert row["option_2_line"] == "Option two"
+    assert row["option_2_needs_review"] == "yes"
+    assert row["option_3_line"] == "Option three"
+
+
 if __name__ == "__main__":
     test_preflight_without_api_key_is_not_blocking()
     test_prompt_hashes_are_stable_shape()
     test_sending_tool_mapping_prefers_approved_edit()
+    test_client_review_export_includes_multishot_options()
     print("preflight_and_export_tests_ok")

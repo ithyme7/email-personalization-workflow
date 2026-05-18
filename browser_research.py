@@ -89,6 +89,8 @@ class BrowserRenderer:
             "viewport": {"width": width, "height": height},
             "is_mobile": is_mobile,
             "device_scale_factor": 2 if is_mobile else 1,
+            "locale": self.settings.browser_locale,
+            "timezone_id": self.settings.browser_timezone,
         }
         if self.settings.browser_user_agent:
             context_options["user_agent"] = self.settings.browser_user_agent

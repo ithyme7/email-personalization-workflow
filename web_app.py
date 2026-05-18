@@ -56,6 +56,9 @@ DELIVERY_COLUMNS = [
     "role",
     "website",
     "personalized_line",
+    "option_1_line",
+    "option_2_line",
+    "option_3_line",
     "needs_manual_review",
     "quality_flags",
     "reviewer_notes",
@@ -361,7 +364,11 @@ def _set_detector_env(advanced_detectors: bool, lighthouse_review: bool) -> None
     os.environ["LIGHTHOUSE_REVIEW"] = "auto" if lighthouse_review else "off"
 
 
-def _sidebar_settings() -> tuple[str, str, str, float, float, bool, bool]:
+def _set_research_region_env(region: str) -> None:
+    os.environ["RESEARCH_REGION"] = region.strip().lower()
+
+
+def _sidebar_settings() -> tuple[str, str, str, float, float, bool, bool, str]:
     settings = load_settings()
     st.sidebar.header("Model")
     providers = ["gemini", "openrouter", "deepseek", "openai"]
@@ -399,10 +406,31 @@ def _sidebar_settings() -> tuple[str, str, str, float, float, bool, bool]:
         value=settings.lighthouse_review not in {"0", "false", "no", "off", "disabled"},
         help="Slower mobile quality audit. Use for deeper review, not every quick batch.",
     )
+    st.sidebar.header("Research region")
+    region_options = {
+        "US App Store / US browser locale": "us",
+        "UK App Store / UK browser locale": "uk",
+        "Netherlands locale": "nl",
+        "Canada locale": "ca",
+        "Australia locale": "au",
+        "Germany locale": "de",
+    }
+    region_values = list(region_options.values())
+    region_labels = list(region_options.keys())
+    current_region = settings.research_region if settings.research_region in region_values else "us"
+    research_region = st.sidebar.selectbox(
+        "Region",
+        region_labels,
+        index=region_values.index(current_region),
+        help="Controls Apple review country plus browser locale/timezone. For true IP-region changes, also set a proxy/VPN URL.",
+    )
+    research_region_value = region_options[research_region]
+    st.sidebar.caption("Dit is regio-emulatie. Een echte VPN/IP-regio vereist nog steeds een proxy/VPN.")
     st.sidebar.header("Pre-flight")
     if st.sidebar.button("Run system check", use_container_width=True):
         _set_api_env(provider, api_key, model_name)
         _set_detector_env(advanced_detectors, lighthouse_review)
+        _set_research_region_env(research_region_value)
         checks = run_preflight(load_settings())
         for check in checks:
             if check.status == "ok":
@@ -415,7 +443,7 @@ def _sidebar_settings() -> tuple[str, str, str, float, float, bool, bool]:
             st.sidebar.error("Fix blocking pre-flight failures before a large batch.")
         else:
             st.sidebar.success("Pre-flight passed without blocking failures.")
-    return provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review
+    return provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review, research_region_value
 
 
 def _load_google_sheet_to_csv(sheet_url: str, worksheet_name: str, service_account_file) -> Path:
@@ -459,9 +487,11 @@ def _run_batch(
     output_price: float,
     advanced_detectors: bool,
     lighthouse_review: bool,
+    research_region: str,
 ) -> tuple[list[dict[str, Any]], Path]:
     _set_api_env(provider, api_key, model_name)
     _set_detector_env(advanced_detectors, lighthouse_review)
+    _set_research_region_env(research_region)
     output_path = _output_path(input_path)
     progress_bar = st.progress(0, text="Preparing batch...")
     status_box = st.empty()
@@ -535,6 +565,7 @@ def _start_background_batch(
     output_price: float,
     advanced_detectors: bool,
     lighthouse_review: bool,
+    research_region: str,
 ) -> None:
     progress_queue: queue.Queue[dict[str, Any]] = queue.Queue()
     output_path = _output_path(input_path)
@@ -550,6 +581,7 @@ def _start_background_batch(
         try:
             _set_api_env(provider, api_key, model_name)
             _set_detector_env(advanced_detectors, lighthouse_review)
+            _set_research_region_env(research_region)
             rows = run(
                 _make_args(input_path, output_path, campaign_context, tone_profile),
                 progress_callback=lambda payload: progress_queue.put({"type": "progress", **payload}),
@@ -732,6 +764,9 @@ def _dashboard(df: pd.DataFrame, cost: CostEstimate | None) -> None:
             "company",
             "person",
             "personalized_line",
+            "option_1_line",
+            "option_2_line",
+            "option_3_line",
             "sendability_reasons",
             "hard_fail_reasons",
             "soft_edit_reasons",
@@ -773,6 +808,11 @@ def _focused_review_panel(filtered: pd.DataFrame) -> None:
 
     line = str(row.get("edited_line") or row.get("personalized_line") or "")
     preview = str(row.get("template_preview") or f"Hey {row.get('person', '[Name]')}\n\n{line}\n\n{DEFAULT_CONTEXT}")
+    option_lines = [
+        str(row.get(f"option_{index}_line", "") or "").strip()
+        for index in range(1, 4)
+        if str(row.get(f"option_{index}_line", "") or "").strip()
+    ]
     evidence = str(row.get("evidence_found") or row.get("evidence_used_for_copy") or "")
     sources = str(row.get("source_urls") or "")
     reasons = " | ".join(
@@ -792,6 +832,18 @@ def _focused_review_panel(filtered: pd.DataFrame) -> None:
     with right:
         st.markdown("**Email preview**")
         st.text_area("Preview", preview, height=150, disabled=True, label_visibility="collapsed")
+        if option_lines:
+            st.markdown("**Generated options**")
+            for option_number, option_line in enumerate(option_lines, 1):
+                st.caption(f"Option {option_number}")
+                st.text_area(
+                    f"Option {option_number}",
+                    option_line,
+                    height=70,
+                    disabled=True,
+                    label_visibility="collapsed",
+                    key=f"focus_option_{selected_idx}_{option_number}",
+                )
         current_decision = str(row.get("human_decision", "unreviewed") or "unreviewed").lower()
         decision_index = HUMAN_DECISIONS.index(current_decision) if current_decision in HUMAN_DECISIONS else 0
         human_decision = st.selectbox("Decision", HUMAN_DECISIONS, index=decision_index, key=f"focus_decision_{selected_idx}")
@@ -946,7 +998,7 @@ def main() -> None:
     st.title("Email Personalization Workflow")
     st.caption("Upload leads, choose context and tone, run the batch, review rows, then export.")
 
-    provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review = _sidebar_settings()
+    provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review, research_region = _sidebar_settings()
 
     dashboard_tab, setup_tab, review_tab, export_tab, training_tab, eval_tab, calibration_tab, history_tab, presets_tab = st.tabs(
         ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Client Training", "Evals", "Tone Calibration", "History", "Tone Presets"]
@@ -1048,6 +1100,7 @@ def main() -> None:
                         output_price,
                         advanced_detectors,
                         lighthouse_review,
+                        research_region,
                     )
                     st.rerun()
                 except Exception as exc:

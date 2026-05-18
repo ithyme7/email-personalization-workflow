@@ -35,6 +35,14 @@ MIN_USEFUL_TEXT_CHARS = 500
 MAX_PAGE_TEXT_CHARS = 5500
 
 
+def _headers(settings: Settings) -> dict[str, str]:
+    return {
+        "User-Agent": settings.browser_user_agent
+        or "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)",
+        "Accept-Language": f"{settings.browser_locale},en;q=0.8",
+    }
+
+
 def _cache_path(url: str) -> Path:
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
     return CACHE_DIR / f"{digest}.json"
@@ -63,9 +71,7 @@ def _fetch_page(url: str, settings: Settings) -> PageText | None:
         except (json.JSONDecodeError, KeyError, OSError):
             logging.warning("Ignoring unreadable cache file for %s", url)
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)"
-    }
+    headers = _headers(settings)
     for attempt in range(2):
         try:
             response = requests.get(url, headers=headers, timeout=settings.request_timeout_seconds)
@@ -130,7 +136,7 @@ def _discover_priority_links(homepage_url: str, settings: Settings, rendered_lin
     try:
         response = requests.get(
             homepage_url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)"},
+            headers=_headers(settings),
             timeout=settings.request_timeout_seconds,
         )
         soup = BeautifulSoup(response.text, "html.parser")
