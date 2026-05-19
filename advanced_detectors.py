@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -117,59 +118,104 @@ def _lighthouse_command_prefix() -> list[str]:
     return []
 
 
+def _playwright_readiness_probe(settings: Settings) -> DetectorReadiness:
+    payload = {
+        "timeout_ms": settings.request_timeout_seconds * 1000,
+        "proxy_url": settings.browser_proxy_url,
+        "browser_locale": settings.browser_locale,
+        "browser_timezone": settings.browser_timezone,
+        "browser_user_agent": settings.browser_user_agent,
+        "axe_core_path": str(AXE_CORE_PATH),
+    }
+    script = r"""
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    launch_kwargs = {"headless": True}
+    if payload.get("proxy_url"):
+        launch_kwargs["proxy"] = {"server": payload["proxy_url"]}
+    browser = p.chromium.launch(**launch_kwargs)
+    context_kwargs = {
+        "viewport": {"width": 390, "height": 844},
+        "is_mobile": True,
+        "locale": payload.get("browser_locale") or "en-US",
+        "timezone_id": payload.get("browser_timezone") or "America/New_York",
+    }
+    if payload.get("browser_user_agent"):
+        context_kwargs["user_agent"] = payload["browser_user_agent"]
+    context = browser.new_context(**context_kwargs)
+    page = context.new_page()
+    page.goto("https://example.com", wait_until="domcontentloaded", timeout=payload["timeout_ms"])
+    axe_core_path = payload.get("axe_core_path") or ""
+    if axe_core_path:
+        page.add_script_tag(path=axe_core_path)
+        axe_source = axe_core_path
+    else:
+        page.add_script_tag(url="https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js")
+        axe_source = "CDN fallback"
+    axe_loaded = bool(page.evaluate("() => Boolean(window.axe)"))
+    context.close()
+    browser.close()
+
+print(json.dumps({"axe_loaded": axe_loaded, "axe_source": axe_source}))
+"""
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", script, json.dumps(payload)],
+            cwd=str(RESOURCE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=max(20, settings.request_timeout_seconds + 12),
+        )
+    except subprocess.TimeoutExpired as exc:
+        return DetectorReadiness(
+            "Playwright + axe",
+            "warn",
+            f"Advanced browser detector check timed out after {exc.timeout}s. The batch can still run, but visual detector evidence may be weaker.",
+            False,
+        )
+    except Exception as exc:
+        return DetectorReadiness(
+            "Playwright + axe",
+            "warn",
+            f"Advanced browser detector subprocess could not start: {exc}. The batch can still run, but visual detector evidence may be weaker.",
+            False,
+        )
+
+    output = (completed.stdout or "").strip().splitlines()
+    last_line = output[-1] if output else ""
+    try:
+        result = json.loads(last_line)
+    except json.JSONDecodeError:
+        result = {}
+
+    if completed.returncode == 0 and result.get("axe_loaded"):
+        return DetectorReadiness(
+            "Playwright + axe",
+            "ok",
+            f"Browser renders and axe loads from {result.get('axe_source', 'unknown source')}.",
+        )
+
+    details = (completed.stderr or completed.stdout or "No diagnostic output.").strip().replace("\n", " ")[:500]
+    return DetectorReadiness(
+        "Playwright + axe",
+        "warn",
+        f"Advanced browser detector check failed in subprocess: {details}. The batch can still run, but visual detector evidence may be weaker.",
+        False,
+    )
+
+
 def check_detector_readiness(settings: Settings) -> list[DetectorReadiness]:
     checks: list[DetectorReadiness] = []
     if not _enabled(settings.advanced_detectors):
         checks.append(DetectorReadiness("Playwright + axe", "ok", "Advanced browser detectors are disabled."))
     else:
-        try:
-            from playwright.sync_api import sync_playwright
-
-            with sync_playwright() as p:
-                launch_kwargs: dict[str, Any] = {"headless": True}
-                if settings.browser_proxy_url:
-                    launch_kwargs["proxy"] = {"server": settings.browser_proxy_url}
-                browser = p.chromium.launch(**launch_kwargs)
-                context_kwargs: dict[str, Any] = {
-                    "viewport": {"width": 390, "height": 844},
-                    "is_mobile": True,
-                    "locale": settings.browser_locale,
-                    "timezone_id": settings.browser_timezone,
-                }
-                if settings.browser_user_agent:
-                    context_kwargs["user_agent"] = settings.browser_user_agent
-                context = browser.new_context(**context_kwargs)
-                page = context.new_page()
-                page.goto("https://example.com", wait_until="domcontentloaded", timeout=settings.request_timeout_seconds * 1000)
-                if AXE_CORE_PATH.exists():
-                    page.add_script_tag(path=str(AXE_CORE_PATH))
-                    axe_source = str(AXE_CORE_PATH)
-                else:
-                    page.add_script_tag(url="https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js")
-                    axe_source = "CDN fallback"
-                axe_loaded = bool(page.evaluate("() => Boolean(window.axe)"))
-                context.close()
-                browser.close()
-            if axe_loaded:
-                checks.append(DetectorReadiness("Playwright + axe", "ok", f"Browser renders and axe loads from {axe_source}."))
-            else:
-                checks.append(
-                    DetectorReadiness(
-                        "Playwright + axe",
-                        "warn",
-                        "Browser rendered, but axe-core did not load. The batch can still run with website/app-store research; visual detector evidence may be weaker.",
-                        False,
-                    )
-                )
-        except Exception as exc:
-            checks.append(
-                DetectorReadiness(
-                    "Playwright + axe",
-                    "warn",
-                    f"Advanced browser detector check failed: {exc}. The batch can still run with fallback website/app-store research; visual detector evidence may be weaker.",
-                    False,
-                )
-            )
+        checks.append(_playwright_readiness_probe(settings))
 
     if not _enabled(settings.lighthouse_review):
         checks.append(DetectorReadiness("Lighthouse", "ok", "Lighthouse checks are disabled."))
