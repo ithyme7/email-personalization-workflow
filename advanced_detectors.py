@@ -153,9 +153,23 @@ def check_detector_readiness(settings: Settings) -> list[DetectorReadiness]:
             if axe_loaded:
                 checks.append(DetectorReadiness("Playwright + axe", "ok", f"Browser renders and axe loads from {axe_source}."))
             else:
-                checks.append(DetectorReadiness("Playwright + axe", "fail", "Browser rendered, but axe-core did not load.", True))
+                checks.append(
+                    DetectorReadiness(
+                        "Playwright + axe",
+                        "warn",
+                        "Browser rendered, but axe-core did not load. The batch can still run with website/app-store research; visual detector evidence may be weaker.",
+                        False,
+                    )
+                )
         except Exception as exc:
-            checks.append(DetectorReadiness("Playwright + axe", "fail", f"Advanced browser detector check failed: {exc}", True))
+            checks.append(
+                DetectorReadiness(
+                    "Playwright + axe",
+                    "warn",
+                    f"Advanced browser detector check failed: {exc}. The batch can still run with fallback website/app-store research; visual detector evidence may be weaker.",
+                    False,
+                )
+            )
 
     if not _enabled(settings.lighthouse_review):
         checks.append(DetectorReadiness("Lighthouse", "ok", "Lighthouse checks are disabled."))

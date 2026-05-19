@@ -13,6 +13,7 @@ data/traces/*
 data/lighthouse/*
 data/ui_uploads/*
 data/custom_tone_profiles/*
+data/client_workspaces/*
 data/run_history/*
 data/goldset/*
 data/campaign_feedback/*
