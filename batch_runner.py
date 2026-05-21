@@ -287,9 +287,8 @@ def _placeholder_row(lead: LeadInput, note: str) -> dict[str, Any]:
     return row
 
 
-def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[str, Any]:
+def _offline_research_row(lead: LeadInput, settings: Settings, deep_research_enabled: bool) -> dict[str, Any]:
     row = _base_row(lead)
-    settings = load_settings()
     research = research_company(lead, settings)
     deep_research = None
     notes = research.reviewer_notes.copy()
@@ -808,7 +807,7 @@ def _process_single_lead(
         return _row_to_dict(row, lead_label, "validation_failed")
 
     if not client.available:
-        row = _offline_research_row(lead, args.deep_research)
+        row = _offline_research_row(lead, settings, args.deep_research)
         missing_key_note = f"{settings.llm_provider.upper()}_API_KEY is missing."
         row["reviewer_notes"] = join_list([row.get("reviewer_notes", ""), missing_key_note])
         row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
