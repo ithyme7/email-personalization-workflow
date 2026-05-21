@@ -59,14 +59,6 @@ def normalize_url(value: str) -> tuple[str, str | None]:
     return normalized, None
 
 
-def dedupe_key(lead: LeadInput) -> str:
-    parsed = urlparse(lead.website_url)
-    domain = parsed.netloc.lower().removeprefix("www.")
-    if domain:
-        return f"site:{domain}"
-    return f"name:{lead.company_name.strip().lower()}"
-
-
 def _first_present(row: pd.Series, candidates: list[str]) -> str:
     for candidate in candidates:
         value = str(row.get(candidate, "")).replace("\r", " ").replace("\n", " ").strip()
@@ -204,7 +196,9 @@ def load_leads(
         )
 
         if lead.is_valid and deduplicate:
-            key = dedupe_key(lead)
+            parsed = urlparse(lead.website_url)
+            domain = parsed.netloc.lower().removeprefix("www.")
+            key = f"site:{domain}" if domain else f"name:{lead.company_name.strip().lower()}"
             if key in seen:
                 lead.is_valid = False
                 lead.is_duplicate = True
