@@ -5,12 +5,13 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+from browser_research import BrowserRenderer, RenderedPage, browser_rendering_enabled, visual_review_enabled
+from cache import cache_path
 from config import CACHE_DIR, SCREENSHOT_DIR, Settings
 
 
@@ -36,8 +37,8 @@ class VisualReview:
 
 
 def _render_cache_path(url: str) -> Path:
-    digest = hashlib.sha256(f"rendered:{url}".encode("utf-8")).hexdigest()
-    return CACHE_DIR / f"{digest}.json"
+    """Rendered-page cache: aparte namespace zodat het de web/deep cache niet verstoort."""
+    return cache_path(url, prefix="rendered:")
 
 
 def _clean_text_and_links(html: str, base_url: str) -> tuple[str, str, list[str]]:
@@ -209,11 +210,8 @@ def _read_render_cache(url: str) -> RenderedPage | None:
 def _write_render_cache(original_url: str, page: RenderedPage) -> None:
     cache_file = _render_cache_path(original_url)
     cache_file.write_text(
-        json.dumps(
-            {"url": page.url, "title": page.title, "text": page.text, "links": page.links},
-            ensure_ascii=False,
-            indent=2,
-        ),
+        json.dumps({"url": page.url, "title": page.title, "text": page.text, "links": page.links},
+                    ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

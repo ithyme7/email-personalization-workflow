@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from cache import cache_path
 from config import CACHE_DIR, Settings
 from models import DeepResearchResult, LeadInput
 
@@ -129,11 +130,6 @@ def _app_store_rank(url: str) -> tuple[int, str]:
     return (9, normalized)
 
 
-def _cache_path(url: str) -> Path:
-    digest = hashlib.sha256(f"deep:{url}".encode("utf-8")).hexdigest()
-    return CACHE_DIR / f"{digest}.json"
-
-
 def _headers(settings: Settings) -> dict[str, str]:
     return {
         "User-Agent": "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)",
@@ -151,14 +147,32 @@ def _clean_text(html: str) -> tuple[str, str]:
 
 
 def _fetch_public_text(url: str, settings: Settings) -> tuple[str, str] | None:
-    cache_file = _cache_path(url)
-    if cache_file.exists():
+    """Haalt publieke tekst op, met gedeelde cache (web + deep namespace)."""
+    # Probeer eerst web-research cache (zonder prefix)
+    cf_web = cache_path(url, prefix="")
+    if cf_web.exists():
         try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            return cached.get("title", ""), cached.get("text", "")
+            cached = json.loads(cf_web.read_text(encoding="utf-8"))
+            text = cached.get("text", "")
+            title = cached.get("title", "")
+            if text:
+                return title, text
         except (json.JSONDecodeError, OSError):
-            logging.warning("Ignoring unreadable deep research cache for %s", url)
+            pass
 
+    # Probeer deep-research cache
+    cf_deep = cache_path(url, prefix="deep:")
+    if cf_deep.exists():
+        try:
+            cached = json.loads(cf_deep.read_text(encoding="utf-8"))
+            text = cached.get("text", "")
+            title = cached.get("title", "")
+            if text:
+                return title, text[:MAX_APP_STORE_TEXT_CHARS]
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Fallback: HTTP-fetch via gedeelde session
     session = _get_session()
     try:
         response = session.get(
@@ -170,7 +184,11 @@ def _fetch_public_text(url: str, settings: Settings) -> tuple[str, str] | None:
             return None
         title, text = _clean_text(response.text)
         text = text[:MAX_APP_STORE_TEXT_CHARS]
-        cache_file.write_text(json.dumps({"title": title, "text": text}, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Schrijf naar deep-namespace cache
+        cf_deep.write_text(
+            json.dumps({"title": title, "text": text}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         return title, text
     except requests.RequestException as exc:
         logging.info("Deep research fetch failed for %s: %s", url, exc)
