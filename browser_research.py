@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 from browser_research import BrowserRenderer, RenderedPage, browser_rendering_enabled, visual_review_enabled
-from cache import cache_path
+from cache import cache_path, read_cached_json, write_cached_json
 from config import CACHE_DIR, SCREENSHOT_DIR, Settings
 from retry import ExponentialBackoff
 
@@ -197,27 +197,25 @@ class BrowserRenderer:
 
 def _read_render_cache(url: str) -> RenderedPage | None:
     cache_file = _render_cache_path(url)
-    if not cache_file.exists():
-        return None
     try:
-        cached = json.loads(cache_file.read_text(encoding="utf-8"))
-        return RenderedPage(
-            url=cached.get("url", url),
-            title=cached.get("title", ""),
-            text=cached.get("text", ""),
-            links=[str(link) for link in cached.get("links", [])],
-        )
+        cached = read_cached_json(cache_file)
     except (json.JSONDecodeError, OSError, TypeError):
         logging.warning("Ignoring unreadable browser render cache for %s", url)
         return None
+    if cached is None:
+        return None
+    return RenderedPage(
+        url=cached.get("url", url),
+        title=cached.get("title", ""),
+        text=cached.get("text", ""),
+        links=[str(link) for link in cached.get("links", [])],
+    )
 
 
 def _write_render_cache(original_url: str, page: RenderedPage) -> None:
-    cache_file = _render_cache_path(original_url)
-    cache_file.write_text(
-        json.dumps({"url": page.url, "title": page.title, "text": page.text, "links": page.links},
-                    ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    write_cached_json(
+        _render_cache_path(original_url),
+        {"url": page.url, "title": page.title, "text": page.text, "links": page.links},
     )
 
 

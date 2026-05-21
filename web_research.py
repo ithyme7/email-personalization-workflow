@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 
 from advanced_detectors import run_advanced_detectors
 from browser_research import BrowserRenderer, RenderedPage, browser_rendering_enabled, visual_review_enabled
-from cache import cache_path
+from cache import cache_path, read_cached_json, write_cached_json
 from config import CACHE_DIR, Settings
 from models import LeadInput, PageText, ResearchResult
 from retry import retry_with_backoff
@@ -63,11 +63,6 @@ def _headers(settings: Settings) -> dict[str, str]:
     }
 
 
-def _cache_path(url: str) -> Path:
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    return CACHE_DIR / f"{digest}.json"
-
-
 def _same_domain(base_url: str, candidate_url: str) -> bool:
     base_domain = urlparse(base_url).netloc.lower().removeprefix("www.")
     candidate_domain = urlparse(candidate_url).netloc.lower().removeprefix("www.")
@@ -83,24 +78,20 @@ def _clean_text(soup: BeautifulSoup) -> str:
 
 
 def _read_cache(url: str) -> PageText | None:
-    """Probeert de gedeelde cache te lezen (zowel web als deep namespace)."""
+    """Probeert de gedeelde cache te lezen (zowel web als deep namespace) met TTL-controle."""
     for prefix in ("", "deep:"):
         cf = cache_path(url, prefix=prefix)
-        if cf.exists():
-            try:
-                cached = json.loads(cf.read_text(encoding="utf-8"))
-                return PageText(url=cached["url"], title=cached.get("title", ""), text=cached.get("text", ""))
-            except (json.JSONDecodeError, KeyError, OSError):
-                continue
+        cached = read_cached_json(cf)
+        if cached is not None:
+            return PageText(url=cached["url"], title=cached.get("title", ""), text=cached.get("text", ""))
     return None
 
 
 def _write_cache(url: str, page: PageText, *, prefix: str = "") -> None:
-    """Schrijft naar de gedeelde cache."""
-    cf = cache_path(url, prefix=prefix)
-    cf.write_text(
-        json.dumps({"url": page.url, "title": page.title, "text": page.text}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+    """Schrijft naar de gedeelde cache met TTL-tijdstempel."""
+    write_cached_json(
+        cache_path(url, prefix=prefix),
+        {"url": page.url, "title": page.title, "text": page.text},
     )
 
 

@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from cache import cache_path
+from cache import cache_path, read_cached_json, write_cached_json
 from config import CACHE_DIR, Settings
 from models import DeepResearchResult, LeadInput
 
@@ -147,30 +147,18 @@ def _clean_text(html: str) -> tuple[str, str]:
 
 
 def _fetch_public_text(url: str, settings: Settings) -> tuple[str, str] | None:
-    """Haalt publieke tekst op, met gedeelde cache (web + deep namespace)."""
+    """Haalt publieke tekst op, met gedeelde cache (web + deep namespace) en TTL."""
     # Probeer eerst web-research cache (zonder prefix)
     cf_web = cache_path(url, prefix="")
-    if cf_web.exists():
-        try:
-            cached = json.loads(cf_web.read_text(encoding="utf-8"))
-            text = cached.get("text", "")
-            title = cached.get("title", "")
-            if text:
-                return title, text
-        except (json.JSONDecodeError, OSError):
-            pass
+    cached = read_cached_json(cf_web)
+    if cached:
+        return cached.get("title", ""), cached.get("text", "")
 
     # Probeer deep-research cache
     cf_deep = cache_path(url, prefix="deep:")
-    if cf_deep.exists():
-        try:
-            cached = json.loads(cf_deep.read_text(encoding="utf-8"))
-            text = cached.get("text", "")
-            title = cached.get("title", "")
-            if text:
-                return title, text[:MAX_APP_STORE_TEXT_CHARS]
-        except (json.JSONDecodeError, OSError):
-            pass
+    cached = read_cached_json(cf_deep)
+    if cached:
+        return cached.get("title", ""), cached.get("text", "")[:MAX_APP_STORE_TEXT_CHARS]
 
     # Fallback: HTTP-fetch via gedeelde session
     session = _get_session()
@@ -184,10 +172,10 @@ def _fetch_public_text(url: str, settings: Settings) -> tuple[str, str] | None:
             return None
         title, text = _clean_text(response.text)
         text = text[:MAX_APP_STORE_TEXT_CHARS]
-        # Schrijf naar deep-namespace cache
-        cf_deep.write_text(
-            json.dumps({"title": title, "text": text}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        # Schrijf naar deep-namespace cache met TTL
+        write_cached_json(
+            cf_deep,
+            {"title": title, "text": text},
         )
         return title, text
     except requests.RequestException as exc:
