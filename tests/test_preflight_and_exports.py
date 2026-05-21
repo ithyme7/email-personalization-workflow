@@ -42,6 +42,7 @@ def _settings(**overrides) -> Settings:
         "tone_profile": "friction_first",
         "max_batch_cost_usd": 0,
         "max_llm_calls_per_batch": 0,
+        "max_workers": 4,
     }
     base.update(overrides)
     return Settings(**base)

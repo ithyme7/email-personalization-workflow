@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
+from threading import local
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -13,8 +14,10 @@ from bs4 import BeautifulSoup
 
 from advanced_detectors import run_advanced_detectors
 from browser_research import BrowserRenderer, RenderedPage, browser_rendering_enabled, visual_review_enabled
+from cache import cache_path, read_cached_json, write_cached_json
 from config import CACHE_DIR, Settings
 from models import LeadInput, PageText, ResearchResult
+from retry import retry_with_backoff
 
 
 PRIORITY_PATH_TERMS = [
@@ -34,6 +37,23 @@ PRIORITY_PATH_TERMS = [
 MIN_USEFUL_TEXT_CHARS = 500
 MAX_PAGE_TEXT_CHARS = 5500
 
+# Thread-local session voor connection pooling
+_local = local()
+
+
+def _get_session() -> requests.Session:
+    """Retourneert een per-thread requests.Session met connection pooling."""
+    if not hasattr(_local, "session") or _local.session is None:
+        _local.session = requests.Session()
+    return _local.session
+
+
+def _clear_session() -> None:
+    """Sluit en verwijderd de thread-local session."""
+    if hasattr(_local, "session") and _local.session is not None:
+        _local.session.close()
+        _local.session = None
+
 
 def _headers(settings: Settings) -> dict[str, str]:
     return {
@@ -41,11 +61,6 @@ def _headers(settings: Settings) -> dict[str, str]:
         or "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)",
         "Accept-Language": f"{settings.browser_locale},en;q=0.8",
     }
-
-
-def _cache_path(url: str) -> Path:
-    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    return CACHE_DIR / f"{digest}.json"
 
 
 def _same_domain(base_url: str, candidate_url: str) -> bool:
@@ -62,39 +77,56 @@ def _clean_text(soup: BeautifulSoup) -> str:
     return text.strip()
 
 
-def _fetch_page(url: str, settings: Settings) -> PageText | None:
-    cache_file = _cache_path(url)
-    if cache_file.exists():
-        try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+def _read_cache(url: str) -> PageText | None:
+    """Probeert de gedeelde cache te lezen (zowel web als deep namespace) met TTL-controle."""
+    for prefix in ("", "deep:"):
+        cf = cache_path(url, prefix=prefix)
+        cached = read_cached_json(cf)
+        if cached is not None:
             return PageText(url=cached["url"], title=cached.get("title", ""), text=cached.get("text", ""))
-        except (json.JSONDecodeError, KeyError, OSError):
-            logging.warning("Ignoring unreadable cache file for %s", url)
+    return None
+
+
+def _write_cache(url: str, page: PageText, *, prefix: str = "") -> None:
+    """Schrijft naar de gedeelde cache met TTL-tijdstempel."""
+    write_cached_json(
+        cache_path(url, prefix=prefix),
+        {"url": page.url, "title": page.title, "text": page.text},
+    )
+
+
+@retry_with_backoff(max_attempts=3, base_delay=1.0)
+def _fetch_page_single(url: str, headers: dict[str, str], session: requests.Session, timeout: int) -> requests.Response:
+    """Enkele HTTP-fetch met retry-decorator. Geeft response of raise exception."""
+    response = session.get(url, headers=headers, timeout=timeout)
+    if response.status_code >= 400:
+        # Dit triggert de retry-logica in de decorator
+        response.raise_for_status()
+    return response
+
+
+def _fetch_page(url: str, settings: Settings) -> PageText | None:
+    cached = _read_cache(url)
+    if cached:
+        return cached
 
     headers = _headers(settings)
-    for attempt in range(2):
-        try:
-            response = requests.get(url, headers=headers, timeout=settings.request_timeout_seconds)
-            if response.status_code >= 400:
-                logging.warning("Fetch failed for %s with HTTP %s", url, response.status_code)
-                return None
-            content_type = response.headers.get("content-type", "")
-            if "text/html" not in content_type and "application/xhtml" not in content_type:
-                return None
-            soup = BeautifulSoup(response.text, "html.parser")
-            title = soup.title.string.strip() if soup.title and soup.title.string else ""
-            text = _clean_text(soup)
-            page = PageText(url=url, title=title, text=text[:MAX_PAGE_TEXT_CHARS])
-            cache_file.write_text(
-                json.dumps({"url": page.url, "title": page.title, "text": page.text}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            time.sleep(settings.request_delay_seconds)
-            return page
-        except requests.RequestException as exc:
-            logging.warning("Fetch attempt %s failed for %s: %s", attempt + 1, url, exc)
-            time.sleep(0.5)
-    return None
+    session = _get_session()
+    try:
+        response = _fetch_page_single(url, headers, session, settings.request_timeout_seconds)
+        content_type = response.headers.get("content-type", "")
+        if "text/html" not in content_type and "application/xhtml" not in content_type:
+            return None
+        soup = BeautifulSoup(response.text, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else ""
+        text = _clean_text(soup)
+        page = PageText(url=url, title=title, text=text[:MAX_PAGE_TEXT_CHARS])
+        _write_cache(url, page)
+        time.sleep(settings.request_delay_seconds)
+        return page
+    except requests.RequestException as exc:
+        logging.warning("Fetch failed for %s: %s", url, exc)
+        return None
 
 
 def _page_from_rendered(page: RenderedPage) -> PageText:
@@ -133,10 +165,12 @@ def _discover_priority_links(homepage_url: str, settings: Settings, rendered_lin
     if rendered_links:
         return _prioritize_links(homepage_url, rendered_links)[: settings.max_pages_per_company - 1]
 
+    headers = _headers(settings)
+    session = _get_session()
     try:
-        response = requests.get(
+        response = session.get(
             homepage_url,
-            headers=_headers(settings),
+            headers=headers,
             timeout=settings.request_timeout_seconds,
         )
         soup = BeautifulSoup(response.text, "html.parser")
@@ -269,13 +303,15 @@ def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
             result.reviewer_notes.extend(advanced.reviewer_notes)
             if advanced.flags:
                 result.reviewer_notes.append(
-                    "Advanced detector found internal UX validation signals: " + ", ".join(advanced.flags[:8])
+                    "Advanced detector found internal UX validation signals: "
+                    + ", ".join(advanced.flags[:8])
                 )
             elif advanced.screenshot_paths:
                 result.reviewer_notes.append("Advanced detector completed with no high-confidence UX flags.")
     finally:
         if renderer:
             renderer.__exit__(None, None, None)
+        _clear_session()
 
     result.source_urls = [page.url for page in result.pages]
     combined = " ".join(page.text for page in result.pages)

@@ -3,16 +3,18 @@ from __future__ import annotations
 import argparse
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 from angle_selector import evidence_for_selected_angle, select_angle
-from config import ensure_directories, load_settings
+from checkpoint import cleanup_checkpoint, load_checkpoint, save_checkpoint
+from config import Settings, ensure_directories, load_settings
 from deep_research import collect_deep_research
+from email_verification import verify_lead_email
 from evidence_extractor import evidence_to_payload, extract_evidence
 from export import export_client_batch_rows, export_delivery_rows, export_rows, export_sending_tool_rows
-from email_verification import verify_lead_email
 from input_loader import dedupe_key, load_leads
 from lead_quality import LeadQualityContext, build_lead_quality_context, evaluate_lead_quality
 from llm_client import LLMClient
@@ -23,6 +25,7 @@ from personalization_writer import write_personalization
 from preflight import has_blocking_failures, preflight_summary, run_preflight
 from prompt_versions import prompt_hashes, tone_profile_hash
 from quality_checker import check_quality
+from rate_limiter import RateLimiter
 from research_tasks import recommended_research_context, run_research_tasks
 from run_history import append_generated_email_rows
 from sales_principles import SalesPrinciplesResult, evaluate_sales_principles
@@ -394,11 +397,11 @@ def _placeholder_row(
 
 def _offline_research_row(
     lead: LeadInput,
+    settings: Settings,
     deep_research_enabled: bool,
     lead_quality_context: LeadQualityContext | None = None,
 ) -> dict[str, Any]:
     row = _base_row(lead, lead_quality_context)
-    settings = load_settings()
     research = research_company(lead, settings)
     deep_research = None
     notes = research.reviewer_notes.copy()
@@ -1047,6 +1050,13 @@ def _process_valid_lead(
         if draft.opening_line:
             avoid_opening_lines.append(draft.opening_line)
 
+        # Vroege afsluiting: als variant 1 al >= 8 scoort en geen serieuze flags heeft,
+        # hoeven we geen extra varianten te genereren.
+        if variant_index >= 1 and qc.passed and qc.score >= 10 and not bool(
+            SERIOUS_QUALITY_FLAGS.intersection(variant_flags)
+        ):
+            break
+
     best_index = _best_variant_index(variants)
     if best_index == 0:
         draft = PersonalizationDraft()
@@ -1117,34 +1127,96 @@ def _process_valid_lead(
     return _apply_mismatch_flags(row)
 
 
+def _process_single_lead(
+    settings: Settings,
+    args: argparse.Namespace,
+    lead: LeadInput,
+    tone_profile_name: str,
+    prompt_meta: dict[str, str],
+    tone_hash: str,
+    lead_quality_context: LeadQualityContext | None = None,
+    ai_available: bool = True,
+    ai_unavailable_note: str = "",
+    rate_limiter: RateLimiter | None = None,
+) -> dict[str, Any]:
+    """Worker-functie: verwerk één lead met een eigen LLMClient (thread-safe)."""
+    client = LLMClient(settings, rate_limiter=rate_limiter)
+
+    lead_label = lead.company_name or lead.website_url or "unnamed row"
+
+    if not lead.is_valid:
+        row = _attach_run_metadata(
+            _placeholder_row(lead, "Row was not processed because input validation failed", lead_quality_context),
+            client,
+            tone_profile_name,
+            prompt_meta,
+            tone_hash,
+        )
+        return _row_to_dict(row, lead_label, "validation_failed")
+
+    if not ai_available or not client.available:
+        row = _offline_research_row(lead, settings, args.deep_research, lead_quality_context)
+        missing_key_note = ai_unavailable_note or f"{settings.llm_provider.upper()}_API_KEY is missing."
+        row["reviewer_notes"] = join_list([row.get("reviewer_notes", ""), missing_key_note])
+        row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
+        return _row_to_dict(row, lead_label, "offline")
+
+    try:
+        row = _process_valid_lead(
+            client,
+            lead,
+            args.manual_review_mode,
+            args.deep_research,
+            tone_profile_name,
+            lead_quality_context,
+        )
+        row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
+        return _row_to_dict(row, lead_label, "complete")
+    except Exception as exc:
+        logging.exception("Failed to process %s", lead.company_name)
+        if args.manual_review_mode:
+            row = _placeholder_row(lead, f"Processing failed: {exc}", lead_quality_context)
+            row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
+            return _row_to_dict(row, lead_label, "failed_review")
+        raise
+
+
+def _row_to_dict(row: dict[str, Any], company: str, status: str) -> dict[str, Any]:
+    """Helper om resultaat terug te sturen met statusinformatie."""
+    row["_status"] = status
+    row["_company"] = company
+    return row
+
+
 def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | None = None) -> list[dict[str, Any]]:
     ensure_directories()
     settings = load_settings()
-    client = LLMClient(settings)
     tone_profile_name = str(getattr(args, "tone_profile", "") or settings.tone_profile)
     prompt_meta = prompt_hashes()
     tone_profile_for_hash = load_tone_profile(tone_profile_name)
     tone_hash = tone_profile_hash(tone_profile_for_hash.to_prompt_payload())
     run_id = uuid.uuid4().hex[:16]
+
     if not getattr(args, "skip_preflight", False):
         checks = run_preflight(settings, output_dir=Path(args.output).parent, check_api=False)
         if has_blocking_failures(checks):
             raise RuntimeError("Pre-flight system check failed:\n" + preflight_summary(checks))
+
     leads = load_leads(args.input, args.campaign_context, deduplicate=not args.reuse_duplicate_personalization)
     lead_quality_context = build_lead_quality_context(leads)
     total = len(leads)
+
     _emit_progress(
         progress_callback,
         event="start",
         current=0,
         total=total,
         progress=0.0,
-        stage="Loading input",
+        stage="Starting parallel batch",
         company="",
     )
 
-    rows: list[dict[str, Any]] = []
-    processed_by_key: dict[str, dict[str, Any]] = {}
+    # ---- Determine key/API mode ----
     if settings.llm_provider == "gemini":
         key_name = "GEMINI_API_KEY"
     elif settings.llm_provider == "openrouter":
@@ -1153,11 +1225,17 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         key_name = "DEEPSEEK_API_KEY"
     else:
         key_name = "OPENAI_API_KEY"
-    missing_key_note = f"{key_name} is missing. Input was validated, but AI generation and QC require an API key."
-    ai_available = client.available
-    ai_unavailable_note = missing_key_note
-    if client.available:
-        ok, preflight_note = client.validate_access()
+
+    ai_available = True
+    ai_unavailable_note = ""
+    # Gedeelde rate limiter voor alle workers (token-bucket, thread-safe)
+    rate_limiter = RateLimiter(
+        max_requests=settings.max_requests_per_minute,
+        window_seconds=60.0,
+    )
+    master_client = LLMClient(settings, rate_limiter=rate_limiter)
+    if master_client.available:
+        ok, preflight_note = master_client.validate_access()
         if ok:
             logging.info("AI preflight check passed for %s", settings.llm_provider)
         else:
@@ -1167,117 +1245,88 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
                 f"{preflight_note}. Research, visual review and workbook export still ran."
             )
             logging.error(ai_unavailable_note)
+    else:
+        ai_available = False
+        missing_key_note = f"{key_name} is missing. Input was validated, but AI generation and QC require an API key."
+        ai_unavailable_note = missing_key_note
 
-    for index, lead in enumerate(leads, 1):
-        logging.info("Processing %s", lead.company_name or lead.website_url or "unnamed row")
-        lead_label = lead.company_name or lead.website_url or f"Row {index}"
-        _emit_progress(
-            progress_callback,
-            event="row_start",
-            current=index - 1,
-            total=total,
-            progress=(index - 1) / total if total else 1.0,
-            stage="Processing row",
-            company=lead_label,
+    # When no AI is available, only research/scraping runs -> safe to use more workers
+    max_workers = settings.max_workers
+    if not ai_available:
+        max_workers = max(max_workers, 8)
+
+    logging.info("Parallel batch: %d leads, %d workers", total, max_workers)
+
+    # ---- Checkpoint: laad reeds verwerkte resultaten ----
+    existing_checkpoint = load_checkpoint(args.output)
+    if existing_checkpoint:
+        logging.info(
+            "Checkpoint gevonden: %d van %d leads reeds verwerkt. Doorgaan...",
+            len(existing_checkpoint),
+            total,
         )
-        if not lead.is_valid:
-            rows.append(
-                _attach_run_metadata(
-                    _placeholder_row(lead, "Row was not processed because input validation failed", lead_quality_context),
-                    client,
-                    tone_profile_name,
-                    prompt_meta,
-                    tone_hash,
-                )
-            )
-            _emit_progress(
-                progress_callback,
-                event="row_complete",
-                current=index,
-                total=total,
-                progress=index / total if total else 1.0,
-                stage="Validation issue exported",
-                company=lead_label,
-            )
-            continue
-        key = dedupe_key(lead)
-        if args.reuse_duplicate_personalization and key in processed_by_key:
-            rows.append(
-                _attach_run_metadata(
-                    _copy_personalization_for_contact(processed_by_key[key], lead, lead_quality_context),
-                    client,
-                    tone_profile_name,
-                    prompt_meta,
-                    tone_hash,
-                )
-            )
-            _emit_progress(
-                progress_callback,
-                event="row_complete",
-                current=index,
-                total=total,
-                progress=index / total if total else 1.0,
-                stage="Duplicate reused",
-                company=lead_label,
-            )
-            continue
-        if not ai_available:
-            row = _offline_research_row(lead, args.deep_research, lead_quality_context)
-            row["reviewer_notes"] = join_list([row.get("reviewer_notes", ""), ai_unavailable_note])
-            row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
-            rows.append(row)
-            processed_by_key[key] = row
-            _emit_progress(
-                progress_callback,
-                event="row_complete",
-                current=index,
-                total=total,
-                progress=index / total if total else 1.0,
-                stage="Research-only row exported",
-                company=lead_label,
-            )
-            continue
-        try:
-            row = _process_valid_lead(
-                client,
-                lead,
-                args.manual_review_mode,
-                args.deep_research,
-                tone_profile_name,
-                lead_quality_context,
-            )
-            row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
-            rows.append(row)
-            processed_by_key[key] = row
-            _emit_progress(
-                progress_callback,
-                event="row_complete",
-                current=index,
-                total=total,
-                progress=index / total if total else 1.0,
-                stage="Row complete",
-                company=lead_label,
-            )
-        except Exception as exc:
-            logging.exception("Failed to process %s", lead.company_name)
-            if args.manual_review_mode:
-                row = _placeholder_row(lead, f"Processing failed: {exc}", lead_quality_context)
-                row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
-                rows.append(row)
-                processed_by_key[key] = row
-                _emit_progress(
-                    progress_callback,
-                    event="row_complete",
-                    current=index,
-                    total=total,
-                    progress=index / total if total else 1.0,
-                    stage="Failed row exported for review",
-                    company=lead_label,
-                )
-            else:
-                raise
+    rows_by_index: dict[int, dict[str, Any]] = {}
+    futures = {}
 
-    usage = client.usage_summary()
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for index, lead in enumerate(leads, 1):
+            # Sla leads over die al in het checkpoint zitten
+            if index in existing_checkpoint:
+                rows_by_index[index] = existing_checkpoint[index]
+                continue
+            future = pool.submit(
+                _process_single_lead,
+                settings,
+                args,
+                lead,
+                tone_profile_name,
+                prompt_meta,
+                tone_hash,
+                lead_quality_context,
+                ai_available,
+                ai_unavailable_note,
+                rate_limiter,
+            )
+            futures[future] = index
+
+        completed = len(rows_by_index)
+        for future in as_completed(futures):
+            index = futures[future]
+            lead = leads[index - 1]
+            lead_label = lead.company_name or lead.website_url or f"Row {index}"
+            try:
+                result_row = future.result()
+                status = result_row.pop("_status", "unknown")
+                result_row.pop("_company", None)
+                rows_by_index[index] = result_row
+            except Exception as exc:
+                logging.exception("Fatal error processing %s", lead_label)
+                if args.manual_review_mode:
+                    placeholder = _placeholder_row(lead, f"Fatal error: {exc}", lead_quality_context)
+                    placeholder = _attach_run_metadata(
+                        placeholder, master_client, tone_profile_name, prompt_meta, tone_hash
+                    )
+                    rows_by_index[index] = placeholder
+                else:
+                    raise
+            completed += 1
+            # ---- Checkpoint na elke lead ----
+            save_checkpoint(rows_by_index, args.output)
+            _emit_progress(
+                progress_callback,
+                event="batch_progress",
+                current=completed,
+                total=total,
+                progress=completed / total if total else 1.0,
+                stage="Processing (parallel)",
+                company=lead_label,
+            )
+
+    # ---- Assemble rows in original order ----
+    rows = [rows_by_index[i] for i in range(1, total + 1)]
+
+    # ---- Post-processing (sequential, fast) ----
+    usage = master_client.usage_summary()
     for row_index, row in enumerate(rows, 1):
         row["run_id"] = row.get("run_id") or run_id
         row["row_id"] = row.get("row_id") or str(row_index)
@@ -1291,6 +1340,10 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         row.update(usage)
         row.update(prompt_meta)
         row["tone_profile_hash"] = tone_hash
+
+    # ---- Opruimen: checkpoint is niet meer nodig ----
+    cleanup_checkpoint(args.output)
+
     append_generated_email_rows(rows)
     _emit_progress(
         progress_callback,
@@ -1301,6 +1354,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         stage="Exporting workbook",
         company="",
     )
+
     if args.client_batch_output:
         export_client_batch_rows(rows, args.output)
         output_path = Path(args.output)
@@ -1317,6 +1371,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
             sending_output = str(base.with_name(f"{base.stem}_{sending_preset}.csv"))
         export_sending_tool_rows(rows, sending_output, preset=sending_preset)
         logging.info("Exported %s sending-tool rows to %s", sending_preset, sending_output)
+
     logging.info("Exported %s rows to %s", len(rows), args.output)
     _emit_progress(
         progress_callback,
@@ -1328,7 +1383,6 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         company="",
     )
     return rows
-
 
 
 class BatchRunner:

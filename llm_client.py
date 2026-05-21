@@ -11,6 +11,8 @@ import requests
 
 from config import PROMPTS_DIR, Settings
 from cost_estimator import price_for_model
+from rate_limiter import RateLimiter
+from retry import ExponentialBackoff
 
 
 class LLMError(RuntimeError):
@@ -18,6 +20,10 @@ class LLMError(RuntimeError):
 
 
 class LLMBudgetExceeded(LLMError):
+    pass
+
+
+class RateLimitedError(LLMError):
     pass
 
 
@@ -47,11 +53,14 @@ def parse_json_object(text: str) -> dict[str, Any]:
 
 
 class LLMClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, rate_limiter: RateLimiter | None = None) -> None:
         self.settings = settings
+        self.rate_limiter = rate_limiter
         self.call_count = 0
         self.estimated_input_tokens = 0
         self.estimated_output_tokens = 0
+        # Connection pooling: herbruikbare TCP-verbindingen via Session
+        self._session = requests.Session()
 
     @property
     def available(self) -> bool:
@@ -99,6 +108,18 @@ class LLMClient:
             return self.settings.deepseek_api_key
         return self.settings.openai_api_key
 
+    def close(self) -> None:
+        """Sluit de onderliggende HTTP-sessie om verbindingen netjes vrij te geven."""
+        self._session.close()
+
+    def _wait_for_rate_limit(self) -> None:
+        """Wacht op een beschikbare rate-limit token voordat een API-call wordt gemaakt.
+
+        Als er geen rate limiter is geconfigureerd, wordt direct doorgaan.
+        """
+        if self.rate_limiter is not None:
+            self.rate_limiter.acquire(blocking=True)
+
     @staticmethod
     def _estimate_tokens(value: Any) -> int:
         text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
@@ -139,16 +160,17 @@ class LLMClient:
         }
 
     def _retry_delay_seconds(self, response: requests.Response) -> float:
-        text = response.text
-        retry_match = re.search(r"retry in ([0-9.]+)s", text, flags=re.IGNORECASE)
-        if retry_match:
-            return min(max(float(retry_match.group(1)) + 3.0, 5.0), 120.0)
-
+        """Parseert Retry-After header of response body voor een specifieke delay."""
         try:
             data = response.json()
         except ValueError:
             data = {}
         details = data.get("error", {}).get("details", []) if isinstance(data, dict) else []
+
+        retry_match = re.search(r"retry in ([0-9.]+)s", response.text, flags=re.IGNORECASE)
+        if retry_match:
+            return min(max(float(retry_match.group(1)) + 3.0, 5.0), 120.0)
+
         for detail in details:
             if not isinstance(detail, dict):
                 continue
@@ -158,6 +180,12 @@ class LLMClient:
                 return min(max(float(delay_match.group(1)) + 3.0, 5.0), 120.0)
 
         if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return min(float(retry_after) + 3.0, 120.0)
+                except ValueError:
+                    pass
             return 45.0
         if response.status_code in {500, 502, 503, 504}:
             return 20.0
@@ -183,10 +211,17 @@ class LLMClient:
         return any(marker in text for marker in quota_markers)
 
     def _post_gemini_with_retry(self, request_json: dict[str, Any]) -> requests.Response:
-        max_attempts = 3
+        """Verzendt Gemini request met exponential backoff via retry module."""
+        backoff = ExponentialBackoff(
+            max_attempts=5,
+            base_delay=1.0,
+            max_delay=60.0,
+        )
         retryable_statuses = {429, 500, 502, 503, 504}
-        for attempt in range(1, max_attempts + 1):
-            response = requests.post(
+
+        for attempt, delay in backoff.attempts():
+            self._wait_for_rate_limit()
+            response = self._session.post(
                 self._endpoint(),
                 params={"key": self._api_key()},
                 headers={"Content-Type": "application/json"},
@@ -198,18 +233,17 @@ class LLMClient:
             if self._is_gemini_quota_exhausted(response):
                 logging.error("Gemini quota exhausted; skipping retry backoff for this request.")
                 return response
-            if response.status_code not in retryable_statuses or attempt == max_attempts:
+            if response.status_code not in retryable_statuses or attempt >= backoff.max_attempts:
                 return response
-
-            delay = self._retry_delay_seconds(response)
             logging.warning(
-                "Gemini rate/high-demand response %s. Waiting %.0f seconds before retry %s/%s.",
+                "Gemini rate/high-demand response %s. Waiting %.1fs before retry %s/%s.",
                 response.status_code,
                 delay,
                 attempt + 1,
-                max_attempts,
+                backoff.max_attempts,
             )
             time.sleep(delay)
+
         return response
 
     def _complete_json_gemini(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
@@ -254,6 +288,7 @@ class LLMClient:
             raise LLMError("OPENAI_API_KEY is missing")
 
         self._enforce_budget(system_prompt, user_payload)
+        self._wait_for_rate_limit()
 
         if self.settings.llm_provider == "gemini":
             return self._complete_json_gemini(system_prompt, user_payload)
@@ -277,7 +312,7 @@ class LLMClient:
             headers["HTTP-Referer"] = "https://local.email-personalizer"
             headers["X-OpenRouter-Title"] = "Email Personalization Workflow"
 
-        response = requests.post(
+        response = self._session.post(
             self._endpoint(),
             headers=headers,
             json=request_json,

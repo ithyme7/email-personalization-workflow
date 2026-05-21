@@ -7,11 +7,13 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+from cache import cache_path, read_cached_json, write_cached_json
 from config import CACHE_DIR, SCREENSHOT_DIR, Settings
+from retry import ExponentialBackoff
 
 
 MAX_RENDERED_TEXT_CHARS = 6500
@@ -37,8 +39,8 @@ class VisualReview:
 
 
 def _render_cache_path(url: str) -> Path:
-    digest = hashlib.sha256(f"rendered:{url}".encode("utf-8")).hexdigest()
-    return CACHE_DIR / f"{digest}.json"
+    """Rendered-page cache: aparte namespace zodat het de web/deep cache niet verstoort."""
+    return cache_path(url, prefix="rendered:")
 
 
 def _clean_text_and_links(html: str, base_url: str) -> tuple[str, str, list[str]]:
@@ -107,13 +109,16 @@ class BrowserRenderer:
         page = context.new_page()
         return context, page
 
-    def _retry_delay(self, attempt: int) -> float:
-        return min(8.0, 0.75 * (2 ** max(0, attempt - 1)))
-
     def _goto_with_retry(self, page, url: str) -> None:
+        """Navigeer naar URL met exponential backoff via ExponentialBackoff."""
+        backoff = ExponentialBackoff(
+            max_attempts=max(1, self.settings.browser_retry_attempts),
+            base_delay=0.75,
+            max_delay=30.0,
+        )
         last_error: Exception | None = None
-        attempts = max(1, self.settings.browser_retry_attempts)
-        for attempt in range(1, attempts + 1):
+
+        for attempt, delay in backoff.attempts():
             try:
                 response = page.goto(
                     url,
@@ -126,10 +131,12 @@ class BrowserRenderer:
                 return
             except Exception as exc:
                 last_error = exc
-                if attempt >= attempts:
+                if attempt >= backoff.max_attempts:
                     break
-                delay = self._retry_delay(attempt)
-                logging.info("Browser render retry %s/%s for %s after %s: waiting %.1fs", attempt + 1, attempts, url, exc, delay)
+                logging.info(
+                    "Browser render retry %s/%s for %s: waiting %.1fs",
+                    attempt, backoff.max_attempts, url, delay,
+                )
                 time.sleep(delay)
         raise last_error or RuntimeError("Browser navigation failed")
 
@@ -161,12 +168,17 @@ class BrowserRenderer:
             ("desktop", 1440, 1200, False),
             ("mobile", 390, 844, True),
         ]
-        for label, width, height, is_mobile in viewports:
-            context = None
-            try:
-                context, page = self._new_page(width, height, is_mobile)
-                self._goto_with_retry(page, url)
-                page.wait_for_timeout(int(self.settings.browser_wait_seconds * 1000))
+        context = None
+        try:
+            # Eerste viewport: nieuwe context aanmaken + navigeren
+            label, width, height, is_mobile = viewports[0]
+            context, page = self._new_page(width, height, is_mobile)
+            self._goto_with_retry(page, url)
+            page.wait_for_timeout(int(self.settings.browser_wait_seconds * 1000))
+
+            # Beide viewports verwerken op dezelfde context (hergebruik!)
+            for label, width, height, is_mobile in viewports:
+                page.set_viewport_size({"width": width, "height": height})
                 final_url = page.url or url
                 screenshot_path = _screenshot_path(final_url, label, company_name)
                 page.screenshot(path=str(screenshot_path), full_page=True)
@@ -177,14 +189,14 @@ class BrowserRenderer:
                 result.quality_flags.extend(flags)
                 result.confidence_reasons.extend(confidence_reasons)
                 result.confidence_score = max([result.confidence_score] + confidence_scores)
-            except Exception as exc:
-                logging.warning("Visual review failed for %s on %s: %s", url, label, exc)
-                result.quality_flags.append("visual_review_failed")
-                result.observations.append(f"{label}: visual review failed, manual check needed")
-                result.confidence_reasons.append(f"{label}: visual review failed, so confidence is low.")
-            finally:
-                if context:
-                    context.close()
+        except Exception as exc:
+            logging.warning("Visual review failed for %s: %s", url, exc)
+            result.quality_flags.append("visual_review_failed")
+            result.observations.append(f"visual review failed, manual check needed: {exc}")
+            result.confidence_reasons.append("visual review failed, so confidence is low.")
+        finally:
+            if context:
+                context.close()
 
         result.quality_flags = list(dict.fromkeys(result.quality_flags))
         result.observations = list(dict.fromkeys(result.observations))
@@ -195,30 +207,25 @@ class BrowserRenderer:
 
 def _read_render_cache(url: str) -> RenderedPage | None:
     cache_file = _render_cache_path(url)
-    if not cache_file.exists():
-        return None
     try:
-        cached = json.loads(cache_file.read_text(encoding="utf-8"))
-        return RenderedPage(
-            url=cached.get("url", url),
-            title=cached.get("title", ""),
-            text=cached.get("text", ""),
-            links=[str(link) for link in cached.get("links", [])],
-        )
+        cached = read_cached_json(cache_file)
     except (json.JSONDecodeError, OSError, TypeError):
         logging.warning("Ignoring unreadable browser render cache for %s", url)
         return None
+    if cached is None:
+        return None
+    return RenderedPage(
+        url=cached.get("url", url),
+        title=cached.get("title", ""),
+        text=cached.get("text", ""),
+        links=[str(link) for link in cached.get("links", [])],
+    )
 
 
 def _write_render_cache(original_url: str, page: RenderedPage) -> None:
-    cache_file = _render_cache_path(original_url)
-    cache_file.write_text(
-        json.dumps(
-            {"url": page.url, "title": page.title, "text": page.text, "links": page.links},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    write_cached_json(
+        _render_cache_path(original_url),
+        {"url": page.url, "title": page.title, "text": page.text, "links": page.links},
     )
 
 
