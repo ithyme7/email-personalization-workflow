@@ -21,6 +21,7 @@ from personalization_writer import write_personalization
 from preflight import has_blocking_failures, preflight_summary, run_preflight
 from prompt_versions import prompt_hashes, tone_profile_hash
 from quality_checker import check_quality
+from rate_limiter import RateLimiter
 from run_history import append_generated_email_rows
 from schemas import stable_hash
 from surface_classifier import classify_surface, is_app_first, research_priority_for
@@ -790,9 +791,10 @@ def _process_single_lead(
     tone_profile_name: str,
     prompt_meta: dict[str, str],
     tone_hash: str,
+    rate_limiter: RateLimiter | None = None,
 ) -> dict[str, Any]:
     """Worker-functie: verwerk één lead met een eigen LLMClient (thread-safe)."""
-    client = LLMClient(settings)
+    client = LLMClient(settings, rate_limiter=rate_limiter)
 
     lead_label = lead.company_name or lead.website_url or "unnamed row"
 
@@ -872,7 +874,12 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
 
     ai_available = True
     ai_unavailable_note = ""
-    master_client = LLMClient(settings)
+    # Gedeelde rate limiter voor alle workers (token-bucket, thread-safe)
+    rate_limiter = RateLimiter(
+        max_requests=settings.max_requests_per_minute,
+        window_seconds=60.0,
+    )
+    master_client = LLMClient(settings, rate_limiter=rate_limiter)
     if master_client.available:
         ok, preflight_note = master_client.validate_access()
         if ok:
@@ -921,6 +928,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
                 tone_profile_name,
                 prompt_meta,
                 tone_hash,
+                rate_limiter,
             )
             futures[future] = index
 

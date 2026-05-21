@@ -11,6 +11,7 @@ import requests
 
 from config import PROMPTS_DIR, Settings
 from cost_estimator import price_for_model
+from rate_limiter import RateLimiter
 from retry import ExponentialBackoff
 
 
@@ -19,6 +20,10 @@ class LLMError(RuntimeError):
 
 
 class LLMBudgetExceeded(LLMError):
+    pass
+
+
+class RateLimitedError(LLMError):
     pass
 
 
@@ -48,8 +53,9 @@ def parse_json_object(text: str) -> dict[str, Any]:
 
 
 class LLMClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, rate_limiter: RateLimiter | None = None) -> None:
         self.settings = settings
+        self.rate_limiter = rate_limiter
         self.call_count = 0
         self.estimated_input_tokens = 0
         self.estimated_output_tokens = 0
@@ -105,6 +111,14 @@ class LLMClient:
     def close(self) -> None:
         """Sluit de onderliggende HTTP-sessie om verbindingen netjes vrij te geven."""
         self._session.close()
+
+    def _wait_for_rate_limit(self) -> None:
+        """Wacht op een beschikbare rate-limit token voordat een API-call wordt gemaakt.
+
+        Als er geen rate limiter is geconfigureerd, wordt direct doorgaan.
+        """
+        if self.rate_limiter is not None:
+            self.rate_limiter.acquire(blocking=True)
 
     @staticmethod
     def _estimate_tokens(value: Any) -> int:
@@ -187,6 +201,7 @@ class LLMClient:
         retryable_statuses = {429, 500, 502, 503, 504}
 
         for attempt, delay in backoff.attempts():
+            self._wait_for_rate_limit()
             response = self._session.post(
                 self._endpoint(),
                 params={"key": self._api_key()},
@@ -251,6 +266,7 @@ class LLMClient:
             raise LLMError("OPENAI_API_KEY is missing")
 
         self._enforce_budget(system_prompt, user_payload)
+        self._wait_for_rate_limit()
 
         if self.settings.llm_provider == "gemini":
             return self._complete_json_gemini(system_prompt, user_payload)
