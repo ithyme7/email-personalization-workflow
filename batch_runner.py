@@ -735,6 +735,13 @@ def _process_valid_lead(
         if draft.opening_line:
             avoid_opening_lines.append(draft.opening_line)
 
+        # Vroege afsluiting: als variant 1 al >= 8 scoort en geen serieuze flags heeft,
+        # hoeven we geen extra varianten te genereren.
+        if variant_index >= 1 and qc.passed and qc.score >= 10 and not bool(
+            SERIOUS_QUALITY_FLAGS.intersection(variant_flags)
+        ):
+            break
+
     best_index = _best_variant_index(variants)
     if best_index == 0:
         draft = PersonalizationDraft()

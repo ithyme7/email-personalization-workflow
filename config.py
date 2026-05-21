@@ -148,7 +148,7 @@ def load_settings() -> Settings:
         max_batch_cost_usd=max(0.0, _float_env("MAX_BATCH_COST_USD", 0.0)),
         max_llm_calls_per_batch=max(0, _int_env("MAX_LLM_CALLS_PER_BATCH", 0)),
         max_workers=max(1, _int_env("MAX_WORKERS", 4)),
-        personalization_options=max(1, min(3, _int_env("PERSONALIZATION_OPTIONS", 3))),
+        personalization_options=max(1, min(3, _int_env("PERSONALIZATION_OPTIONS", 2))),
         research_region=region,
         app_store_country=app_store_country,
         browser_locale=browser_locale,
