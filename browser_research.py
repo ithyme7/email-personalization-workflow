@@ -152,12 +152,17 @@ class BrowserRenderer:
             ("desktop", 1440, 1200, False),
             ("mobile", 390, 844, True),
         ]
-        for label, width, height, is_mobile in viewports:
-            context = None
-            try:
-                context, page = self._new_page(width, height, is_mobile)
-                self._goto_with_retry(page, url)
-                page.wait_for_timeout(int(self.settings.browser_wait_seconds * 1000))
+        context = None
+        try:
+            # Eerste viewport: nieuwe context aanmaken + navigeren
+            label, width, height, is_mobile = viewports[0]
+            context, page = self._new_page(width, height, is_mobile)
+            self._goto_with_retry(page, url)
+            page.wait_for_timeout(int(self.settings.browser_wait_seconds * 1000))
+
+            # Beide viewports verwerken op dezelfde context (hergebruik!)
+            for label, width, height, is_mobile in viewports:
+                page.set_viewport_size({"width": width, "height": height})
                 final_url = page.url or url
                 screenshot_path = _screenshot_path(final_url, label, company_name)
                 page.screenshot(path=str(screenshot_path), full_page=True)
@@ -168,14 +173,14 @@ class BrowserRenderer:
                 result.quality_flags.extend(flags)
                 result.confidence_reasons.extend(confidence_reasons)
                 result.confidence_score = max([result.confidence_score] + confidence_scores)
-            except Exception as exc:
-                logging.warning("Visual review failed for %s on %s: %s", url, label, exc)
-                result.quality_flags.append("visual_review_failed")
-                result.observations.append(f"{label}: visual review failed, manual check needed")
-                result.confidence_reasons.append(f"{label}: visual review failed, so confidence is low.")
-            finally:
-                if context:
-                    context.close()
+        except Exception as exc:
+            logging.warning("Visual review failed for %s: %s", url, exc)
+            result.quality_flags.append("visual_review_failed")
+            result.observations.append(f"visual review failed, manual check needed: {exc}")
+            result.confidence_reasons.append("visual review failed, so confidence is low.")
+        finally:
+            if context:
+                context.close()
 
         result.quality_flags = list(dict.fromkeys(result.quality_flags))
         result.observations = list(dict.fromkeys(result.observations))
