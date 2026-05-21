@@ -13,6 +13,7 @@ from config import ensure_directories, load_settings
 from deep_research import collect_deep_research
 from evidence_extractor import evidence_to_payload, extract_evidence
 from export import export_client_batch_rows, export_rows, export_sending_tool_rows
+from checkpoint import load_checkpoint, save_checkpoint, cleanup_checkpoint
 from input_loader import load_leads
 from llm_client import LLMClient
 from models import EvidenceFact, EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
@@ -896,15 +897,23 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
 
     logging.info("Parallel batch: %d leads, %d workers", total, max_workers)
 
-    # ---- Process leads in parallel via ThreadPoolExecutor ----
-    # Each worker thread creates its own LLMClient instance (thread-safe).
-    # Settings is a frozen dataclass, so it can be safely shared across threads.
-    # We track results by index to preserve original order.
+    # ---- Checkpoint: laad reeds verwerkte resultaten ----
+    existing_checkpoint = load_checkpoint(args.output)
+    if existing_checkpoint:
+        logging.info(
+            "Checkpoint gevonden: %d van %d leads reeds verwerkt. Doorgaan...",
+            len(existing_checkpoint),
+            total,
+        )
     rows_by_index: dict[int, dict[str, Any]] = {}
     futures = {}
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         for index, lead in enumerate(leads, 1):
+            # Sla leads over die al in het checkpoint zitten
+            if index in existing_checkpoint:
+                rows_by_index[index] = existing_checkpoint[index]
+                continue
             future = pool.submit(
                 _process_single_lead,
                 settings,
@@ -916,7 +925,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
             )
             futures[future] = index
 
-        completed = 0
+        completed = len(rows_by_index)
         for future in as_completed(futures):
             index = futures[future]
             lead = leads[index - 1]
@@ -930,11 +939,15 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
                 logging.exception("Fatal error processing %s", lead_label)
                 if args.manual_review_mode:
                     placeholder = _placeholder_row(lead, f"Fatal error: {exc}")
-                    placeholder = _attach_run_metadata(placeholder, master_client, tone_profile_name, prompt_meta, tone_hash)
+                    placeholder = _attach_run_metadata(
+                        placeholder, master_client, tone_profile_name, prompt_meta, tone_hash
+                    )
                     rows_by_index[index] = placeholder
                 else:
                     raise
             completed += 1
+            # ---- Checkpoint na elke lead ----
+            save_checkpoint(rows_by_index, args.output)
             _emit_progress(
                 progress_callback,
                 event="batch_progress",
@@ -964,6 +977,9 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         row.update(prompt_meta)
         row["tone_profile_hash"] = tone_hash
 
+    # ---- Opruimen: checkpoint is niet meer nodig ----
+    cleanup_checkpoint(args.output)
+
     append_generated_email_rows(rows)
     _emit_progress(
         progress_callback,
@@ -979,7 +995,6 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         export_client_batch_rows(rows, args.output)
     else:
         export_rows(rows, args.output)
-
     sending_preset = str(getattr(args, "sending_tool_preset", "") or "").strip()
     if sending_preset:
         sending_output = str(getattr(args, "sending_tool_output", "") or "").strip()
