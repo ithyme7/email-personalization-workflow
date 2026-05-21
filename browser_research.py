@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from browser_research import BrowserRenderer, RenderedPage, browser_rendering_enabled, visual_review_enabled
 from cache import cache_path
 from config import CACHE_DIR, SCREENSHOT_DIR, Settings
+from retry import ExponentialBackoff
 
 
 MAX_RENDERED_TEXT_CHARS = 6500
@@ -99,13 +100,16 @@ class BrowserRenderer:
         page = context.new_page()
         return context, page
 
-    def _retry_delay(self, attempt: int) -> float:
-        return min(8.0, 0.75 * (2 ** max(0, attempt - 1)))
-
     def _goto_with_retry(self, page, url: str) -> None:
+        """Navigeer naar URL met exponential backoff via ExponentialBackoff."""
+        backoff = ExponentialBackoff(
+            max_attempts=max(1, self.settings.browser_retry_attempts),
+            base_delay=0.75,
+            max_delay=30.0,
+        )
         last_error: Exception | None = None
-        attempts = max(1, self.settings.browser_retry_attempts)
-        for attempt in range(1, attempts + 1):
+
+        for attempt, delay in backoff.attempts():
             try:
                 response = page.goto(
                     url,
@@ -118,10 +122,12 @@ class BrowserRenderer:
                 return
             except Exception as exc:
                 last_error = exc
-                if attempt >= attempts:
+                if attempt >= backoff.max_attempts:
                     break
-                delay = self._retry_delay(attempt)
-                logging.info("Browser render retry %s/%s for %s after %s: waiting %.1fs", attempt + 1, attempts, url, exc, delay)
+                logging.info(
+                    "Browser render retry %s/%s for %s: waiting %.1fs",
+                    attempt, backoff.max_attempts, url, delay,
+                )
                 time.sleep(delay)
         raise last_error or RuntimeError("Browser navigation failed")
 
@@ -167,7 +173,6 @@ class BrowserRenderer:
                 final_url = page.url or url
                 screenshot_path = _screenshot_path(final_url, label, company_name)
                 page.screenshot(path=str(screenshot_path), full_page=True)
-                result.screenshot_paths.append(str(screenshot_path.resolve()))
                 analysis = page.evaluate(_VISUAL_ANALYSIS_SCRIPT.replace("return ", "", 1))
                 observations, flags, confidence_reasons, confidence_scores = _visual_observations(label, analysis or {})
                 result.observations.extend(observations)

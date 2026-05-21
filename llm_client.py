@@ -11,6 +11,7 @@ import requests
 
 from config import PROMPTS_DIR, Settings
 from cost_estimator import price_for_model
+from retry import ExponentialBackoff
 
 
 class LLMError(RuntimeError):
@@ -145,16 +146,17 @@ class LLMClient:
         }
 
     def _retry_delay_seconds(self, response: requests.Response) -> float:
-        text = response.text
-        retry_match = re.search(r"retry in ([0-9.]+)s", text, flags=re.IGNORECASE)
-        if retry_match:
-            return min(max(float(retry_match.group(1)) + 3.0, 5.0), 120.0)
-
+        """Parseert Retry-After header of response body voor een specifieke delay."""
         try:
             data = response.json()
         except ValueError:
             data = {}
         details = data.get("error", {}).get("details", []) if isinstance(data, dict) else []
+
+        retry_match = re.search(r"retry in ([0-9.]+)s", response.text, flags=re.IGNORECASE)
+        if retry_match:
+            return min(max(float(retry_match.group(1)) + 3.0, 5.0), 120.0)
+
         for detail in details:
             if not isinstance(detail, dict):
                 continue
@@ -164,15 +166,27 @@ class LLMClient:
                 return min(max(float(delay_match.group(1)) + 3.0, 5.0), 120.0)
 
         if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return min(float(retry_after) + 3.0, 120.0)
+                except ValueError:
+                    pass
             return 45.0
         if response.status_code in {500, 502, 503, 504}:
             return 20.0
         return 0.0
 
     def _post_gemini_with_retry(self, request_json: dict[str, Any]) -> requests.Response:
-        max_attempts = 5
+        """Verzendt Gemini request met exponential backoff via retry module."""
+        backoff = ExponentialBackoff(
+            max_attempts=5,
+            base_delay=1.0,
+            max_delay=60.0,
+        )
         retryable_statuses = {429, 500, 502, 503, 504}
-        for attempt in range(1, max_attempts + 1):
+
+        for attempt, delay in backoff.attempts():
             response = self._session.post(
                 self._endpoint(),
                 params={"key": self._api_key()},
@@ -182,18 +196,17 @@ class LLMClient:
             )
             if response.status_code < 400:
                 return response
-            if response.status_code not in retryable_statuses or attempt == max_attempts:
+            if response.status_code not in retryable_statuses or attempt >= backoff.max_attempts:
                 return response
-
-            delay = self._retry_delay_seconds(response)
             logging.warning(
-                "Gemini rate/high-demand response %s. Waiting %.0f seconds before retry %s/%s.",
+                "Gemini rate/high-demand response %s. Waiting %.1fs before retry %s/%s.",
                 response.status_code,
                 delay,
                 attempt + 1,
-                max_attempts,
+                backoff.max_attempts,
             )
             time.sleep(delay)
+
         return response
 
     def _complete_json_gemini(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:

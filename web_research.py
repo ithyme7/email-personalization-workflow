@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
+from threading import local
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -16,9 +17,10 @@ from browser_research import BrowserRenderer, RenderedPage, browser_rendering_en
 from cache import cache_path
 from config import CACHE_DIR, Settings
 from models import LeadInput, PageText, ResearchResult
+from retry import retry_with_backoff
 
 
-PRIORITY_PATH_TTERMS = [
+PRIORITY_PATH_TERMS = [
     "about",
     "service",
     "solution",
@@ -36,21 +38,21 @@ MIN_USEFUL_TEXT_CHARS = 500
 MAX_PAGE_TEXT_CHARS = 5500
 
 # Thread-local session voor connection pooling
-_local = local()  # type: ignore
+_local = local()
 
 
 def _get_session() -> requests.Session:
     """Retourneert een per-thread requests.Session met connection pooling."""
-    if not hasattr(_local, "session") or _local.session is None:  # type: ignore
-        _local.session = requests.Session()  # type: ignore
-    return _local.session  # type: ignore
+    if not hasattr(_local, "session") or _local.session is None:
+        _local.session = requests.Session()
+    return _local.session
 
 
 def _clear_session() -> None:
     """Sluit en verwijderd de thread-local session."""
-    if hasattr(_local, "session") and _local.session is not None:  # type: ignore
-        _local.session.close()  # type: ignore
-        _local.session = None  # type: ignore
+    if hasattr(_local, "session") and _local.session is not None:
+        _local.session.close()
+        _local.session = None
 
 
 def _headers(settings: Settings) -> dict[str, str]:
@@ -59,6 +61,11 @@ def _headers(settings: Settings) -> dict[str, str]:
         or "Mozilla/5.0 (compatible; EmailPersonalizationResearchBot/1.0; +local-review-tool)",
         "Accept-Language": f"{settings.browser_locale},en;q=0.8",
     }
+
+
+def _cache_path(url: str) -> Path:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return CACHE_DIR / f"{digest}.json"
 
 
 def _same_domain(base_url: str, candidate_url: str) -> bool:
@@ -97,6 +104,16 @@ def _write_cache(url: str, page: PageText, *, prefix: str = "") -> None:
     )
 
 
+@retry_with_backoff(max_attempts=3, base_delay=1.0)
+def _fetch_page_single(url: str, headers: dict[str, str], session: requests.Session, timeout: int) -> requests.Response:
+    """Enkele HTTP-fetch met retry-decorator. Geeft response of raise exception."""
+    response = session.get(url, headers=headers, timeout=timeout)
+    if response.status_code >= 400:
+        # Dit triggert de retry-logica in de decorator
+        response.raise_for_status()
+    return response
+
+
 def _fetch_page(url: str, settings: Settings) -> PageText | None:
     cached = _read_cache(url)
     if cached:
@@ -104,26 +121,21 @@ def _fetch_page(url: str, settings: Settings) -> PageText | None:
 
     headers = _headers(settings)
     session = _get_session()
-    for attempt in range(2):
-        try:
-            response = session.get(url, headers=headers, timeout=settings.request_timeout_seconds)
-            if response.status_code >= 400:
-                logging.warning("Fetch failed for %s with HTTP %s", url, response.status_code)
-                return None
-            content_type = response.headers.get("content-type", "")
-            if "text/html" not in content_type and "application/xhtml" not in content_type:
-                return None
-            soup = BeautifulSoup(response.text, "html.parser")
-            title = soup.title.string.strip() if soup.title and soup.title.string else ""
-            text = _clean_text(soup)
-            page = PageText(url=url, title=title, text=text[:MAX_PAGE_TEXT_CHARS])
-            _write_cache(url, page)
-            time.sleep(settings.request_delay_seconds)
-            return page
-        except requests.RequestException as exc:
-            logging.warning("Fetch attempt %s failed for %s: %s", attempt + 1, url, exc)
-            time.sleep(0.5)
-    return None
+    try:
+        response = _fetch_page_single(url, headers, session, settings.request_timeout_seconds)
+        content_type = response.headers.get("content-type", "")
+        if "text/html" not in content_type and "application/xhtml" not in content_type:
+            return None
+        soup = BeautifulSoup(response.text, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else ""
+        text = _clean_text(soup)
+        page = PageText(url=url, title=title, text=text[:MAX_PAGE_TEXT_CHARS])
+        _write_cache(url, page)
+        time.sleep(settings.request_delay_seconds)
+        return page
+    except requests.RequestException as exc:
+        logging.warning("Fetch failed for %s: %s", url, exc)
+        return None
 
 
 def _page_from_rendered(page: RenderedPage) -> PageText:
