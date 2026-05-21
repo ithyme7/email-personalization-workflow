@@ -19,6 +19,7 @@ from client_workspaces import ClientWorkspace, list_client_workspaces, load_clie
 from batch_runner import run
 from config import DATA_DIR, OUTPUT_DIR, load_settings
 from cost_estimator import CostEstimate, estimate_batch_cost, price_for_model
+from delivery_policy import DELIVERY_COLUMNS, split_delivery_review_needed, strict_delivery_dataframe
 from export import CLIENT_REVIEW_COLUMNS, _client_rows
 from export_mappings import preset_names, sending_tool_dataframe
 from google_sheets import (
@@ -49,23 +50,6 @@ RUN_INPUT_DIR = DATA_DIR / "ui_uploads"
 RUN_OUTPUT_DIR = OUTPUT_DIR / "ui_runs"
 CUSTOM_PROFILE_DIR = DATA_DIR / "custom_tone_profiles"
 SAMPLE_INPUT_PATH = DATA_DIR / "input" / "sample_companies.csv"
-DELIVERY_COLUMNS = [
-    "sendability_decision",
-    "human_decision",
-    "company",
-    "person",
-    "role",
-    "website",
-    "personalized_line",
-    "option_1_line",
-    "option_2_line",
-    "option_3_line",
-    "needs_manual_review",
-    "quality_flags",
-    "reviewer_notes",
-]
-
-
 st.set_page_config(
     page_title="Email Personalization Workflow",
     page_icon="*",
@@ -197,8 +181,16 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "privacy_flags",
         "client_safe_asset_status",
         "sendability_dimensions",
+        "sales_principles_score",
+        "sales_principles_summary",
+        "signal_to_implication_bridge_score",
+        "input_mapping_warning",
+        "mismatch_reason",
         "human_decision",
         "edited_line",
+        "selected_opener",
+        "selected_opener_source",
+        "edited_final_opener",
         "edit_reason_category",
         "edit_notes",
         "company",
@@ -206,6 +198,36 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "role",
         "website",
         "personalized_line",
+        "recommended_opener",
+        "recommended_opener_option",
+        "recommended_opener_reason",
+        "opener_option_1",
+        "opener_option_1_angle",
+        "opener_option_1_evidence",
+        "opener_option_1_source_url",
+        "opener_option_1_sendability",
+        "opener_option_1_sendability_score",
+        "opener_option_1_quality_flags",
+        "opener_option_1_sales_principles_summary",
+        "opener_option_1_rejection_or_edit_reason",
+        "opener_option_2",
+        "opener_option_2_angle",
+        "opener_option_2_evidence",
+        "opener_option_2_source_url",
+        "opener_option_2_sendability",
+        "opener_option_2_sendability_score",
+        "opener_option_2_quality_flags",
+        "opener_option_2_sales_principles_summary",
+        "opener_option_2_rejection_or_edit_reason",
+        "opener_option_3",
+        "opener_option_3_angle",
+        "opener_option_3_evidence",
+        "opener_option_3_source_url",
+        "opener_option_3_sendability",
+        "opener_option_3_sendability_score",
+        "opener_option_3_quality_flags",
+        "opener_option_3_sales_principles_summary",
+        "opener_option_3_rejection_or_edit_reason",
         "template_preview",
         "evidence_found",
         "quality_flags",
@@ -216,6 +238,19 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "conversion_outcome",
         "product_surface_type",
         "research_priority",
+        "lead_quality_score",
+        "lead_quality_flags",
+        "email_verification_status",
+        "research_revenue_model",
+        "research_revenue_model_confidence",
+        "research_target_customer",
+        "research_target_customer_confidence",
+        "research_website_tech_stack",
+        "research_website_tech_stack_confidence",
+        "research_latest_funding_details",
+        "research_latest_funding_confidence",
+        "research_traffic_summary",
+        "research_traffic_confidence",
         "visual_confidence",
         "visual_confidence_score",
         "visual_confidence_reasons",
@@ -240,17 +275,7 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
 
 
 def _delivery_df(df: pd.DataFrame) -> pd.DataFrame:
-    prepared = df.copy()
-    if "human_decision" in prepared and "edited_line" in prepared and "personalized_line" in prepared:
-        use_edit = (
-            prepared["human_decision"].fillna("").astype(str).str.lower().isin({"send", "edit"})
-            & prepared["edited_line"].fillna("").astype(str).str.strip().ne("")
-        )
-        prepared.loc[use_edit, "personalized_line"] = prepared.loc[use_edit, "edited_line"]
-    columns = [column for column in DELIVERY_COLUMNS if column in df.columns]
-    delivery = prepared[columns].copy()
-    if "status" in prepared.columns:
-        delivery.insert(0, "status", prepared["status"])
+    delivery, _, _ = strict_delivery_dataframe(df, DELIVERY_COLUMNS)
     return delivery
 
 
@@ -350,13 +375,15 @@ def _make_args(input_path: Path, output_path: Path, campaign_context: str, tone_
 def _set_api_env(provider: str, api_key: str, model_name: str) -> None:
     os.environ["LLM_PROVIDER"] = provider
     os.environ["MODEL_NAME"] = model_name
+    key_by_provider = {
+        "gemini": "GEMINI_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "openai": "OPENAI_API_KEY",
+    }
+    for key_name in key_by_provider.values():
+        os.environ.pop(key_name, None)
     if api_key.strip():
-        key_by_provider = {
-            "gemini": "GEMINI_API_KEY",
-            "openrouter": "OPENROUTER_API_KEY",
-            "deepseek": "DEEPSEEK_API_KEY",
-            "openai": "OPENAI_API_KEY",
-        }
         os.environ[key_by_provider[provider]] = api_key.strip()
 
 
@@ -807,13 +834,26 @@ def _focused_review_panel(filtered: pd.DataFrame) -> None:
     selected_idx = index_by_label[selected_label]
     row = st.session_state["review_df"].loc[selected_idx]
 
-    line = str(row.get("edited_line") or row.get("personalized_line") or "")
+    line = str(row.get("edited_final_opener") or row.get("selected_opener") or row.get("edited_line") or row.get("personalized_line") or "")
     preview = str(row.get("template_preview") or f"Hey {row.get('person', '[Name]')}\n\n{line}\n\n{DEFAULT_CONTEXT}")
-    option_lines = [
-        str(row.get(f"option_{index}_line", "") or "").strip()
-        for index in range(1, 4)
-        if str(row.get(f"option_{index}_line", "") or "").strip()
-    ]
+    option_cards = []
+    for index in range(1, 4):
+        option_line = str(row.get(f"opener_option_{index}") or row.get(f"option_{index}_line", "") or "").strip()
+        if not option_line:
+            continue
+        option_cards.append(
+            {
+                "source": f"option_{index}",
+                "line": option_line,
+                "angle": str(row.get(f"opener_option_{index}_angle", "") or "").strip(),
+                "evidence": str(row.get(f"opener_option_{index}_evidence", "") or "").strip(),
+                "sendability": str(row.get(f"opener_option_{index}_sendability", "") or "").strip(),
+                "score": str(row.get(f"opener_option_{index}_sendability_score", "") or "").strip(),
+                "flags": str(row.get(f"opener_option_{index}_quality_flags", "") or "").strip(),
+                "sales": str(row.get(f"opener_option_{index}_sales_principles_summary", "") or "").strip(),
+                "reason": str(row.get(f"opener_option_{index}_rejection_or_edit_reason", "") or "").strip(),
+            }
+        )
     evidence = str(row.get("evidence_found") or row.get("evidence_used_for_copy") or "")
     sources = str(row.get("source_urls") or "")
     reasons = " | ".join(
@@ -833,28 +873,52 @@ def _focused_review_panel(filtered: pd.DataFrame) -> None:
     with right:
         st.markdown("**Email preview**")
         st.text_area("Preview", preview, height=150, disabled=True, label_visibility="collapsed")
-        if option_lines:
+        if option_cards:
             st.markdown("**Generated options**")
-            for option_number, option_line in enumerate(option_lines, 1):
-                st.caption(f"Option {option_number}")
-                st.text_area(
-                    f"Option {option_number}",
-                    option_line,
-                    height=70,
-                    disabled=True,
-                    label_visibility="collapsed",
-                    key=f"focus_option_{selected_idx}_{option_number}",
-                )
+            for option in option_cards:
+                label = option["source"].replace("_", " ").title()
+                with st.expander(
+                    f"{label} - {option['sendability'] or 'Unscored'} {option['score']}".strip(),
+                    expanded=option["source"] == str(row.get("selected_opener_source", "")),
+                ):
+                    st.text_area(
+                        f"{label} line",
+                        option["line"],
+                        height=70,
+                        disabled=True,
+                        label_visibility="collapsed",
+                        key=f"focus_option_{selected_idx}_{option['source']}",
+                    )
+                    cols = st.columns(2)
+                    cols[0].caption(f"Angle: {option['angle'] or '-'}")
+                    cols[1].caption(f"Flags: {option['flags'] or '-'}")
+                    if option["evidence"]:
+                        st.caption(f"Evidence: {option['evidence']}")
+                    if option["sales"]:
+                        st.caption(f"Sales principles: {option['sales']}")
+                    if option["reason"]:
+                        st.caption(f"Reason: {option['reason']}")
+        source_options = [option["source"] for option in option_cards] + ["custom"]
+        current_source = str(row.get("selected_opener_source", "") or row.get("recommended_opener_option", "") or "")
+        source_index = source_options.index(current_source) if current_source in source_options else 0
+        selected_source = st.radio("Selected opener", source_options, index=source_index, horizontal=True, key=f"focus_selected_source_{selected_idx}") if source_options else "custom"
+        source_line = next((option["line"] for option in option_cards if option["source"] == selected_source), "")
         current_decision = str(row.get("human_decision", "unreviewed") or "unreviewed").lower()
         decision_index = HUMAN_DECISIONS.index(current_decision) if current_decision in HUMAN_DECISIONS else 0
         human_decision = st.selectbox("Decision", HUMAN_DECISIONS, index=decision_index, key=f"focus_decision_{selected_idx}")
-        edited_line = st.text_area("Edited line", str(row.get("edited_line", "") or ""), height=92, key=f"focus_edit_{selected_idx}")
+        custom_default = str(row.get("edited_final_opener") or row.get("edited_line") or "")
+        edited_line = st.text_area("Custom rewrite", custom_default, height=92, key=f"focus_edit_{selected_idx}")
         current_reason = str(row.get("edit_reason_category", "not_reviewed") or "not_reviewed")
         reason_index = EDIT_REASON_CATEGORIES.index(current_reason) if current_reason in EDIT_REASON_CATEGORIES else 0
         edit_reason = st.selectbox("Edit reason", EDIT_REASON_CATEGORIES, index=reason_index, key=f"focus_reason_{selected_idx}")
         edit_notes = st.text_area("Review notes", str(row.get("edit_notes", "") or ""), height=70, key=f"focus_notes_{selected_idx}")
         if st.button("Save focused review", use_container_width=True):
             updated = st.session_state["review_df"].copy()
+            selected_opener = edited_line.strip() if selected_source == "custom" else source_line
+            updated.at[selected_idx, "selected_opener"] = selected_opener
+            updated.at[selected_idx, "selected_opener_source"] = selected_source
+            updated.at[selected_idx, "edited_final_opener"] = edited_line if selected_source == "custom" else ""
+            updated.at[selected_idx, "personalized_line"] = selected_opener
             updated.at[selected_idx, "human_decision"] = human_decision
             updated.at[selected_idx, "edited_line"] = edited_line
             updated.at[selected_idx, "edit_reason_category"] = edit_reason
@@ -1218,11 +1282,32 @@ def main() -> None:
                 sorted(surface_options),
                 default=sorted(surface_options),
             )
+            angle_options = df["friction_type"].dropna().replace("", pd.NA).dropna().unique().tolist() if "friction_type" in df else []
+            angle_filter = st.multiselect(
+                "Filter angle type",
+                sorted(angle_options),
+                default=sorted(angle_options),
+            )
+            evidence_source = (
+                df["source_urls"].fillna("").astype(str).str.extract(r"(https?://[^ |\n]+)", expand=False).fillna("")
+                if "source_urls" in df
+                else pd.Series([""] * len(df), index=df.index)
+            )
+            evidence_options = evidence_source.replace("", pd.NA).dropna().unique().tolist()
+            evidence_filter = st.multiselect(
+                "Filter evidence source",
+                sorted(evidence_options),
+                default=sorted(evidence_options),
+            )
             filtered = df[df["status"].isin(status_filter)] if status_filter and "status" in df else df
             if decision_filter and "sendability_decision" in filtered:
                 filtered = filtered[filtered["sendability_decision"].isin(decision_filter)]
             if surface_filter and "surface_correctness" in filtered:
                 filtered = filtered[filtered["surface_correctness"].isin(surface_filter)]
+            if angle_filter and "friction_type" in filtered:
+                filtered = filtered[filtered["friction_type"].isin(angle_filter)]
+            if evidence_filter and "source_urls" in filtered:
+                filtered = filtered[filtered["source_urls"].fillna("").astype(str).apply(lambda value: any(source in value for source in evidence_filter))]
             st.caption("Use `human_decision`, `edited_line`, and `edit_reason_category` to turn reviewed rows into a reusable goldset.")
             with st.expander("Fast focused review", expanded=True):
                 _focused_review_panel(filtered)
@@ -1252,6 +1337,20 @@ def main() -> None:
                     "privacy_flags",
                     "client_safe_asset_status",
                     "sendability_dimensions",
+                    "sales_principles_score",
+                    "sales_principles_summary",
+                    "recommended_opener",
+                    "recommended_opener_option",
+                    "recommended_opener_reason",
+                    "opener_option_1_sendability",
+                    "opener_option_1_sendability_score",
+                    "opener_option_1_sales_principles_summary",
+                    "opener_option_2_sendability",
+                    "opener_option_2_sendability_score",
+                    "opener_option_2_sales_principles_summary",
+                    "opener_option_3_sendability",
+                    "opener_option_3_sendability_score",
+                    "opener_option_3_sales_principles_summary",
                 ],
                 column_config={
                     "sendability_decision": st.column_config.TextColumn("sendability_decision", width="small"),
@@ -1274,6 +1373,29 @@ def main() -> None:
                     "privacy_flags": st.column_config.TextColumn("privacy_flags", width="large"),
                     "client_safe_asset_status": st.column_config.TextColumn("client_safe_asset_status", width="small"),
                     "sendability_dimensions": st.column_config.TextColumn("sendability_dimensions", width="large"),
+                    "sales_principles_score": st.column_config.NumberColumn("sales_principles_score", width="small"),
+                    "sales_principles_summary": st.column_config.TextColumn("sales_principles_summary", width="large"),
+                    "recommended_opener": st.column_config.TextColumn("recommended_opener", width="large"),
+                    "recommended_opener_option": st.column_config.TextColumn("recommended_opener_option", width="small"),
+                    "recommended_opener_reason": st.column_config.TextColumn("recommended_opener_reason", width="large"),
+                    "selected_opener": st.column_config.TextColumn("selected_opener", width="large"),
+                    "selected_opener_source": st.column_config.SelectboxColumn("selected_opener_source", options=["option_1", "option_2", "option_3", "custom", ""]),
+                    "edited_final_opener": st.column_config.TextColumn("edited_final_opener", width="large"),
+                    "opener_option_1": st.column_config.TextColumn("opener_option_1", width="large"),
+                    "opener_option_1_angle": st.column_config.TextColumn("opener_option_1_angle", width="medium"),
+                    "opener_option_1_sendability": st.column_config.TextColumn("opener_option_1_sendability", width="small"),
+                    "opener_option_1_sendability_score": st.column_config.NumberColumn("opener_option_1_sendability_score", width="small"),
+                    "opener_option_1_sales_principles_summary": st.column_config.TextColumn("opener_option_1_sales_principles_summary", width="large"),
+                    "opener_option_2": st.column_config.TextColumn("opener_option_2", width="large"),
+                    "opener_option_2_angle": st.column_config.TextColumn("opener_option_2_angle", width="medium"),
+                    "opener_option_2_sendability": st.column_config.TextColumn("opener_option_2_sendability", width="small"),
+                    "opener_option_2_sendability_score": st.column_config.NumberColumn("opener_option_2_sendability_score", width="small"),
+                    "opener_option_2_sales_principles_summary": st.column_config.TextColumn("opener_option_2_sales_principles_summary", width="large"),
+                    "opener_option_3": st.column_config.TextColumn("opener_option_3", width="large"),
+                    "opener_option_3_angle": st.column_config.TextColumn("opener_option_3_angle", width="medium"),
+                    "opener_option_3_sendability": st.column_config.TextColumn("opener_option_3_sendability", width="small"),
+                    "opener_option_3_sendability_score": st.column_config.NumberColumn("opener_option_3_sendability_score", width="small"),
+                    "opener_option_3_sales_principles_summary": st.column_config.TextColumn("opener_option_3_sales_principles_summary", width="large"),
                     "human_decision": st.column_config.SelectboxColumn("human_decision", options=HUMAN_DECISIONS),
                     "edited_line": st.column_config.TextColumn("edited_line", width="large"),
                     "edit_reason_category": st.column_config.SelectboxColumn("edit_reason_category", options=EDIT_REASON_CATEGORIES),
@@ -1301,6 +1423,12 @@ def main() -> None:
                         & updated["edited_line"].fillna("").astype(str).str.strip().ne("")
                     )
                     updated.loc[mask, "personalized_line"] = updated.loc[mask, "edited_line"]
+                    if "edited_final_opener" in updated:
+                        updated.loc[mask, "edited_final_opener"] = updated.loc[mask, "edited_line"]
+                    if "selected_opener" in updated:
+                        updated.loc[mask, "selected_opener"] = updated.loc[mask, "edited_line"]
+                    if "selected_opener_source" in updated:
+                        updated.loc[mask, "selected_opener_source"] = "custom"
                     st.session_state["review_df"] = apply_sendability_to_dataframe(updated)
                     st.success(f"Applied edited lines to {int(mask.sum())} rows. Original model lines were preserved for goldset/training.")
             goldset_split = st.selectbox(
@@ -1352,20 +1480,29 @@ def main() -> None:
                     )
 
             st.markdown("**Client delivery export**")
-            delivery = _delivery_df(df)
-            delivery_filter = st.radio(
-                "Rows for client delivery",
-                ["All rows", "Sendability: Send only", "Human-approved send/edit only"],
-                horizontal=True,
+            full_delivery, review_needed, delivery_audit = split_delivery_review_needed(df)
+            delivery, _, _ = strict_delivery_dataframe(df, DELIVERY_COLUMNS)
+            if delivery_audit.excluded_rows:
+                st.warning(
+                    f"Delivery export excludes {delivery_audit.excluded_rows} rows "
+                    f"({delivery_audit.excluded_edit_rows} Edit, {delivery_audit.excluded_reject_rows} Reject/unapproved/policy-blocked). "
+                    "Excluded rows stay in review_needed."
+                )
+                st.download_button(
+                    "Download review_needed CSV",
+                    review_needed.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                    "review_needed_rows.csv",
+                    "text/csv",
+                    use_container_width=True,
+                )
+            st.caption(
+                f"Strict delivery policy: {delivery_audit.delivery_rows}/{delivery_audit.input_rows} rows included. "
+                "Only Send rows or human-approved final openers are eligible."
             )
-            if delivery_filter == "Sendability: Send only" and "sendability_decision" in delivery:
-                delivery = delivery[delivery["sendability_decision"] == "Send"]
-            elif delivery_filter == "Human-approved send/edit only" and "human_decision" in delivery:
-                delivery = delivery[delivery["human_decision"].fillna("").astype(str).str.lower().isin({"send", "edit"})]
             delivery_columns = st.multiselect(
                 "Columns for client delivery",
                 delivery.columns.tolist(),
-                default=[column for column in ["company", "person", "role", "personalized_line"] if column in delivery.columns],
+                default=[column for column in DELIVERY_COLUMNS if column in delivery.columns],
             )
             delivery_out = delivery[delivery_columns] if delivery_columns else delivery
             d1, d2 = st.columns(2)
@@ -1391,7 +1528,7 @@ def main() -> None:
                 index=preset_names().index("generic"),
                 help="Creates a CSV/XLSX with column names matching common sending tools, so manual mapping is reduced.",
             )
-            mapped_delivery = sending_tool_dataframe(delivery, preset=mapping_preset)
+            mapped_delivery = sending_tool_dataframe(full_delivery, preset=mapping_preset)
             m1, m2 = st.columns(2)
             m1.download_button(
                 f"Download {mapping_preset} CSV",

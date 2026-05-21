@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from models import EvidenceResult, LeadInput, PersonalizationDraft
 from deliverability import deliverability_flags
 from grounding import grounding_flags
+from sales_principles import evaluate_sales_principles
 from taxonomy import ABSTRACT_PHRASES, BANNED_FILLER_WORDS, OUTCOME_TERMS, TECHNICAL_AUDIT_TERMS
 
 
@@ -55,6 +56,9 @@ APP_EVIDENCE_MARKERS = {
 DOWNLOAD_PATTERNS = (
     r"\bi\s+downloaded\b",
     r"\bi\s+installed\b",
+    r"\bi\s+tried\s+(?:the\s+)?(?:[a-z0-9'\-]+\s+)?app\b",
+    r"\bi\s+loved\s+using\s+(?:the\s+)?(?:[a-z0-9'\-]+\s+)?app\b",
+    r"\bi\s+opened\s+(?:the\s+)?(?:[a-z0-9'\-]+\s+)?app\b",
     r"\bafter\s+downloading\b",
     r"\bafter\s+installing\b",
 )
@@ -89,12 +93,19 @@ def _replace_brand_casing(text: str, lead: LeadInput | None) -> str:
 def _remove_download_claims(text: str) -> str:
     result = str(text or "")
     replacements = {
-        r"\bi\s+downloaded\s+the\b": "I opened the",
-        r"\bi\s+downloaded\b": "I opened",
-        r"\bi\s+installed\s+the\b": "I opened the",
-        r"\bi\s+installed\b": "I opened",
-        r"\bafter\s+downloading\b": "after opening",
-        r"\bafter\s+installing\b": "after opening",
+        r"\bi\s+downloaded\s+the\b": "I checked the",
+        r"\bi\s+downloaded\b": "I checked",
+        r"\bi\s+installed\s+the\b": "I checked the",
+        r"\bi\s+installed\b": "I checked",
+        r"\bi\s+tried\s+the\b": "I checked the",
+        r"\bi\s+tried\b": "I checked",
+        r"\bi\s+loved\s+using\s+the\b": "I noticed the",
+        r"\bi\s+loved\s+using\b": "I noticed",
+        r"\bi\s+opened\s+the\s+app\b": "I checked the app listing",
+        r"\bi\s+opened\s+the\s+([A-Za-z0-9'\-]+)\s+app\b": r"I checked the \1 app listing",
+        r"\bi\s+opened\s+([A-Za-z0-9'\-]+)\s+app\b": r"I checked the \1 app listing",
+        r"\bafter\s+downloading\b": "after checking",
+        r"\bafter\s+installing\b": "after checking",
     }
     for pattern, replacement in replacements.items():
         result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
@@ -112,6 +123,50 @@ def sanitize_personalization_draft(draft: PersonalizationDraft, lead: LeadInput 
         tailored_insight=tailored_insight,
         chosen_angle=chosen_angle,
         evidence_used_for_copy=evidence_used,
+    )
+
+
+def soften_assertive_claims(text: str) -> str:
+    result = str(text or "")
+    replacements = [
+        (r"\bi'?d\s+bet\s+that'?s\s+costing\b", "that could be costing"),
+        (r"\bi'?d\s+bet\s+that\s+is\s+costing\b", "that could be costing"),
+        (r"\bi'?d\s+bet\s+that\b", "that could mean"),
+        (r"\bi'?d\s+guess\s+that'?s\s+costing\b", "that could be costing"),
+        (r"\bi'?d\s+guess\s+that\s+is\s+costing\b", "that could be costing"),
+        (r"\bi'?d\s+guess\s+that'?s\s+causing\b", "that could be causing"),
+        (r"\bi'?d\s+guess\s+that\b", "that might mean"),
+        (r"\bi\s+bet\s+that'?s\s+costing\b", "that could be costing"),
+        (r"\bi\s+bet\s+that\s+([^,.]+?)\s+is\s+losing\b", r"that \1 could be losing"),
+        (r"\bi\s+bet\s+that\b", "that could mean"),
+        (r"\bthat'?s\s+costing\b", "that could be costing"),
+        (r"\bthat\s+is\s+costing\b", "that could be costing"),
+        (r"\bis\s+costing\s+you\b", "could be costing you"),
+        (r"\bis\s+losing\s+you\b", "could be losing you"),
+        (r"\bis\s+hurting\b", "could be hurting"),
+        (r"\balmost\s+certainly\b", "may be"),
+        (r"\blikely\s+causes\b", "could cause"),
+        (r"\blikely\s+causing\b", "could be causing"),
+    ]
+    for pattern, replacement in replacements:
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+    return result
+
+
+def soften_draft_for_weak_evidence(draft: PersonalizationDraft, evidence: EvidenceResult) -> PersonalizationDraft:
+    weak = evidence.needs_manual_review or any(
+        fact.strength.lower() != "strong"
+        or "low confidence" in f"{fact.fact} {fact.why_it_matters}".lower()
+        or "visual confidence: low" in f"{fact.fact} {fact.why_it_matters}".lower()
+        for fact in evidence.facts
+    )
+    if not weak:
+        return draft
+    return PersonalizationDraft(
+        opening_line=soften_assertive_claims(draft.opening_line).strip(),
+        tailored_insight=soften_assertive_claims(draft.tailored_insight).strip(),
+        chosen_angle=draft.chosen_angle,
+        evidence_used_for_copy=draft.evidence_used_for_copy,
     )
 
 
@@ -182,5 +237,27 @@ def local_personalization_flags(
         app_evidence = any(marker in evidence_text for marker in APP_EVIDENCE_MARKERS)
         if app_evidence and ("website" in line_lower or "blog" in line_lower) and "app" not in line_lower:
             flags.append("wrong_surface")
+        sales_result = evaluate_sales_principles(
+            draft.opening_line,
+            evidence=evidence_text,
+            source_url=" | ".join(fact.source_url for fact in evidence.facts if fact.source_url),
+            angle=draft.chosen_angle,
+            campaign_context=lead.campaign_context if lead else "",
+            manual_app_verified=bool(lead and lead.app_flow_observation.strip()),
+        )
+        if sales_result.fake_familiarity_flag:
+            flags.append("fake_familiarity_claim")
+        if sales_result.salesy_language_flag:
+            flags.append("salesy_language")
+        if sales_result.one_insight_score < 60:
+            flags.append("multiple_insights")
+        if sales_result.outcome_bridge_score < 60:
+            flags.append("missing_outcome_bridge")
+        if sales_result.signal_to_implication_bridge_score < 55:
+            flags.append("signal_to_implication_bridge_weak")
+        if any(reason.startswith("unsupported_implication") for reason in sales_result.sales_principles_reasons):
+            flags.append("unsupported_implication")
+        if sales_result.evidence_supported_claim_score < 35:
+            flags.append("unsupported_meaningful_claim")
 
     return list(dict.fromkeys(flags))

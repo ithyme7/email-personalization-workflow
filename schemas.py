@@ -9,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 
 def clean_text(value: Any) -> str:
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
     return str(value or "").strip()
 
 
@@ -66,6 +71,12 @@ class RunRow(BaseModel):
     model_opening_line: str = ""
     current_opening_line: str = ""
     final_delivery_line: str = ""
+    recommended_opener: str = ""
+    recommended_opener_option: str = ""
+    recommended_opener_reason: str = ""
+    selected_opener: str = ""
+    selected_opener_source: str = ""
+    edited_final_opener: str = ""
     personalized_line: str = ""
     opening_line: str = ""
     template_preview: str = ""
@@ -102,13 +113,14 @@ class RunRow(BaseModel):
         person = _first_non_empty(row, "person", "recipient_name")
         role = _first_non_empty(row, "role", "recipient_role")
         website = _first_non_empty(row, "website", "website_url")
-        current_line = _first_non_empty(row, "personalized_line", "opening_line", "current_opening_line")
+        current_line = _first_non_empty(row, "selected_opener", "personalized_line", "opening_line", "current_opening_line")
         model_line = _first_non_empty(row, "model_opening_line", "original_line", "non_preferred_line") or current_line
         human_decision = clean_text(row.get("human_decision")).lower() or "unreviewed"
         if human_decision not in {"unreviewed", "send", "edit", "reject"}:
             human_decision = "unreviewed"
         edited_line = clean_text(row.get("edited_line"))
-        final_line = edited_line if human_decision in {"send", "edit"} and edited_line else current_line
+        edited_final = clean_text(row.get("edited_final_opener")) or edited_line
+        final_line = edited_final if human_decision in {"send", "edit"} and edited_final else current_line
         row_id = clean_text(row.get("row_id")) or (str(fallback_row_id) if fallback_row_id is not None else "")
         resolved_run_id = clean_text(row.get("run_id")) or run_id
         example_id = clean_text(row.get("example_id")) or stable_hash(
@@ -149,6 +161,12 @@ class RunRow(BaseModel):
             "model_opening_line": model_line,
             "current_opening_line": current_line,
             "final_delivery_line": final_line,
+            "recommended_opener": clean_text(row.get("recommended_opener")),
+            "recommended_opener_option": clean_text(row.get("recommended_opener_option")),
+            "recommended_opener_reason": clean_text(row.get("recommended_opener_reason")),
+            "selected_opener": clean_text(row.get("selected_opener")) or current_line,
+            "selected_opener_source": clean_text(row.get("selected_opener_source")),
+            "edited_final_opener": edited_final,
             "human_decision": human_decision,
             "edited_line": edited_line,
             "edit_reason_category": clean_text(row.get("edit_reason_category")) or "not_reviewed",

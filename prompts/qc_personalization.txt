@@ -8,9 +8,9 @@ Check whether the draft follows the client's standard:
 - Every claim is supported by supplied evidence.
 - If the line references LinkedIn, app walkthroughs, screenshots, news, or competitors, that claim must be present in the supplied evidence.
 - Does not sound AI-generated.
-- Opens conversationally as a surface check, for example "I was just checking out the [product] app...", "I opened the [product] app/listing...", "I was looking at the [product] App Store listing...", or "I was on the [product] website...".
+- Opens conversationally as a surface check, for example "I was just checking out the [product] app listing...", "I was looking at the [product] App Store listing...", "I was checking the public signup flow...", or "I was on the [product] website...".
 - Uses "the [product] app" or "the [product] website" instead of a domain-first phrase when possible.
-- Does not claim "I downloaded the app" or "I installed the app" unless a human reviewer supplied a manual app walkthrough note proving it.
+- Does not claim "I downloaded the app", "I installed the app", "I tried the app", "I loved using it", or "I opened the app" unless a human reviewer supplied a manual app walkthrough note proving it.
 - Keeps company/product names lowercase when the supplied name is lowercase, rather than title-casing them into something more AI-like.
 - Names one specific issue, such as onboarding friction, unclear first action, booking friction, signup friction, paywall friction, dead button, weak proof, unclear value prop, or a website/app flow that could cause drop-off.
 - Ties that issue to user behaviour, activation, conversion, retention, bookings, signup completion, first-session churn, paywall conversion, or drop-off.
@@ -30,8 +30,8 @@ Check whether the draft follows the client's standard:
 - If tone_profile.custom_prompt is supplied, follows it only when it is compatible with the evidence, no-hallucination, no-genericness, and no-em-dash rules.
 
 Tone examples:
-- "I opened the fitrooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon."
-- "I opened the FocusBoard app and got hit with calendar, tasks, notes, and health widgets on the first screen, I bet some new users churn because there is no obvious place to start."
+- "I was checking the fitrooms app listing and the booking flow looks like it takes a few taps before slots appear, I'd guess that's costing bookings from users trying to book soon."
+- "I was checking the FocusBoard onboarding evidence and the first screen introduces calendar, tasks, notes, and health widgets at once, I bet some new users churn before finding where to start."
 - "I was on the SleepWorks website and noticed the case study links go to external sources rather than direct customer quotes on the page, pulling those quotes closer to the CTA would likely lift conversion."
 - "I was checking out the RunTrail website and saw the main CTA blends into the background colour, I'd bet that is costing you signups."
 - "I was on the Journally website and noticed social login is hidden until you scroll on the signup page, I'd bet that is hurting signup completion."
@@ -40,7 +40,8 @@ Mandatory flags:
 - Include "em_dash" if the opening line or insight contains an em dash.
 - Include "genericness" if the opening line or insight could apply to many companies.
 - Include "unsupported_claims" if any claim is not present in the supplied evidence.
-- Include "download_claim" if the line says the sender downloaded or installed the app without a supplied manual app walkthrough note.
+- Include "download_claim" if the line says the sender downloaded, installed, tried, loved using, or opened the app without a supplied manual app walkthrough note.
+- Include "fake_familiarity_claim" for any app-usage claim that sounds personally verified when no manual app walkthrough note is supplied.
 - Include "generic_praise" if it relies on vague praise.
 - Include "too_long" if the opening line is over 40 words or feels bloated.
 - Include "ai_mush" if it sounds robotic, templated, or synthetic.

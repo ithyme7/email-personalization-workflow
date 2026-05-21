@@ -185,6 +185,35 @@ def _surface_rank(fact: EvidenceFact) -> int:
     return 5
 
 
+def _is_app_or_review_surface(fact: EvidenceFact) -> bool:
+    text = _combined_text(fact)
+    return (
+        "app listing" in text
+        or "app-store" in text
+        or "app store" in text
+        or "google play" in text
+        or "review" in text
+        or "app onboarding" in text
+        or "first screen" in text
+        or "paywall" in text
+        or "access code" in text
+        or fact.friction_type == "app_store_signal"
+    )
+
+
+def _is_website_surface(fact: EvidenceFact) -> bool:
+    text = _combined_text(fact)
+    return any(marker in text for marker in {"website", "homepage", "landing page", "blog"}) and not _is_app_or_review_surface(fact)
+
+
+def _website_evidence_clearly_stronger(fact: EvidenceFact) -> bool:
+    text = _combined_text(fact)
+    return fact.strength == "strong" and (
+        fact.friction_type in {"broken_formatting", "low_visibility_cta", "hidden_signup_or_login", "signup_friction", "checkout_friction"}
+        or _contains_any(text, HIGH_VALUE_BUG_MARKERS | HIGH_VALUE_CTA_MARKERS | HIGH_VALUE_FLOW_MARKERS)
+    )
+
+
 def _rank_fact(fact: EvidenceFact) -> tuple[int, int, int, int, int, int, int]:
     explicit_priority = fact.angle_priority if fact.angle_priority > 0 else 9
     angle_bucket = _angle_bucket(fact)
@@ -200,6 +229,18 @@ def _rank_fact(fact: EvidenceFact) -> tuple[int, int, int, int, int, int, int]:
     )
 
 
+def _app_first_rank_adjustment(fact: EvidenceFact, app_evidence_available: bool) -> int:
+    if not app_evidence_available:
+        return 0
+    if _is_app_or_review_surface(fact):
+        return 0
+    if _is_website_surface(fact) and _website_evidence_clearly_stronger(fact):
+        return 1
+    if _is_website_surface(fact):
+        return 3
+    return 2
+
+
 def select_angle(evidence: EvidenceResult) -> AngleSelection:
     allowed: list[EvidenceFact] = []
     blocked: list[str] = []
@@ -213,7 +254,8 @@ def select_angle(evidence: EvidenceResult) -> AngleSelection:
             continue
         allowed.append(fact)
 
-    allowed = sorted(allowed, key=_rank_fact)
+    app_evidence_available = any(_is_app_or_review_surface(fact) for fact in allowed)
+    allowed = sorted(allowed, key=lambda fact: (_app_first_rank_adjustment(fact, app_evidence_available), _rank_fact(fact)))
     selected = allowed[0] if allowed else None
     blocked_flags = list(dict.fromkeys(flags))
 
@@ -242,6 +284,9 @@ def select_angle(evidence: EvidenceResult) -> AngleSelection:
     if selected.friction_type == "app_store_signal":
         selected_flags.append("app_store_angle_review")
         selected_notes.append("Selected angle is based on public app-store/app-listing evidence, so check it manually if possible.")
+    if app_evidence_available and _is_website_surface(selected):
+        selected_flags.append("website_surface_used_for_app_first_product")
+        selected_notes.append("App/review evidence was available, but a website surface was selected because it appeared stronger; review before sending.")
 
     return AngleSelection(
         selected_fact=selected,

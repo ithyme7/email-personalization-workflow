@@ -10,12 +10,12 @@ The tool is designed around evidence first, copy second:
 4. Fall back to Playwright browser rendering for JavaScript-heavy pages.
 5. Collect public app-store/listing signals when available.
 6. Run visual checks on desktop and mobile screenshots.
-7. Extract structured evidence.
-8. Select the strongest friction-first angle.
-9. Generate one short opening line and one insight.
-10. Run strict quality control.
-11. Run a sendability gate that separates rows into Send, Edit, or Reject.
-12. Export a readable workbook with dashboard, review rows, evidence, sources, confidence, and manual-review notes.
+7. Run lightweight enrichment for revenue model, target customer, email verification status, tech-stack hints, funding/news safety, traffic availability, and lead quality.
+8. Extract structured evidence.
+9. Select the strongest friction-first angles.
+10. Generate two to three opener options where evidence allows.
+11. Run strict QC, sendability, and sales-principles scoring per opener option.
+12. Review, select, rewrite, save goldset/preference data, and export client-ready output.
 
 The workflow is intentionally conservative: weak evidence should become a review flag, not a confident-sounding guess.
 
@@ -35,6 +35,9 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Shareable screenshot assets copied next to the workbook and zipped into a delivery package. Raw traces stay internal.
 - Evidence-first prompt chain.
 - Friction-prioritized angle selection.
+- Multi-shot opener generation with `opener_option_1..3`, per-option evidence, angle, sendability, flags, and sales-principles summary.
+- Recommended opener selection that can return `no_sendable_option` instead of forcing a weak winner.
+- Lightweight enrichment columns for revenue model, target customer, website tech-stack hints, funding/news safety, traffic-provider stub, email verification status, and lead quality.
 - Strict no-em-dash and genericness checks.
 - Manual-review mode so weak rows still export.
 - CSV or Excel output.
@@ -54,7 +57,7 @@ The workflow is intentionally conservative: weak evidence should become a review
 - Demo sample mode for low-risk walkthroughs during calls.
 - Batch history with run date, model, cost estimate, ready/review split, and output path.
 - Tone calibration tab for saving client feedback as a reusable profile.
-- Multidimensional sendability gate with hard-fail reasons, soft-edit reasons, evidence score, copy score, outcome score, template-fit score, visual reliability, and surface correctness.
+- Multidimensional sendability gate with hard-fail reasons, soft-edit reasons, evidence score, copy score, outcome score, template-fit score, visual reliability, surface correctness, and sales-principles score.
 - Viewport scope and evidence scope for visual/UX claims.
 - Human edit/goldset workflow with reviewed examples, frozen eval examples, and candidate training examples.
 - Frozen eval runner for measuring gate/human agreement on locked examples.
@@ -74,6 +77,23 @@ The workflow is intentionally conservative: weak evidence should become a review
 ## Public Safety Notes
 
 This repository contains only generic source code, prompts, and fake sample data. Do not commit real client lists, generated outputs, API keys, browser screenshots, cache files, or `.env` files.
+
+## Multi-Shot, Enrichment, And Sales-Principles Scoring
+
+The workflow now treats opener options as first-class objects instead of one row-level score. When evidence allows, each lead gets up to three options:
+
+- `opener_option_1`, `opener_option_2`, `opener_option_3`
+- per-option angle, evidence, source URL, sendability decision/score, quality flags, sales-principles summary, and rejection/edit reason
+- `recommended_opener`, `recommended_opener_option`, and `recommended_opener_reason`
+- human review fields for `selected_opener`, `selected_opener_source`, `edited_final_opener`, `human_decision`, `edit_reason_category`, and `edit_notes`
+
+Sales-principles scoring is deterministic and compact. It does not ingest sales books or copyrighted book text. Instead it checks practical outbound rules: specificity beats cleverness, one insight per opener, friction over generic praise, natural bridge to William's drop-off/activation/conversion/bookings/retention/trust pitch, no fake app familiarity, low salesiness, and evidence before claim.
+
+Enrichment is lightweight and optional. Revenue model, target customer, tech-stack hints, latest funding/news, and traffic fields return structured results with `confidence`, `evidence`, `source_url`, `uncertainty_reason`, and `recommended_use_for_opener`. Only medium/high-confidence results marked `recommended_use_for_opener=true` are allowed to feed opener generation. Funding and traffic default to low-confidence/not available unless a reliable source or provider is configured.
+
+Email verification is provider-ready but non-blocking. With no provider configured, the no-op verifier returns `not_checked`, adds lead-quality context, and lets the batch continue. Later provider adapters can be added for ZeroBounce, NeverBounce, Bouncer, MillionVerifier, Hunter, Apollo/Clay export status, or similar tools without changing the review/export contract.
+
+Exports preserve original input columns exactly first. Workflow columns are appended after them; if a workflow column collides with an input column name, only the workflow column is prefixed with `workflow__`.
 
 ## Setup
 
@@ -452,6 +472,7 @@ The gate is multidimensional:
 - `visual_reliability_score`: how reliable the visual/UX finding is.
 - `viewport_scope`: whether a visual claim is backed by mobile, desktop, both, or unknown viewport evidence.
 - `evidence_scope`: whether the row has source URLs, screenshots, both, or thin evidence.
+- `sales_principles_score`: specificity, one-insight discipline, friction relevance, outcome bridge, commercial relevance, salesiness, fake familiarity, and claim support.
 - `privacy_flags`: internal markers such as trace files or local paths that should not go into client handoff.
 
 Additional local guardrails now run before or alongside model QC:
@@ -461,6 +482,8 @@ Additional local guardrails now run before or alongside model QC:
 - budget checks stop API usage before a configured cost/call limit is exceeded
 
 In the web app, use `human_decision`, `edited_line`, `edit_reason_category`, and `edit_notes` in the Review tab. Click `Save reviewed rows to goldset` to append reviewed examples to one of three local splits:
+
+For multi-shot rows, the goldset stores all opener options, not only the selected final line. Non-selected options are useful preference data because they show what the reviewer rejected, ignored, or rewrote.
 
 ```text
 data/goldset/reviewed_examples.csv

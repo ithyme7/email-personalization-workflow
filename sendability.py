@@ -10,6 +10,8 @@ import pandas as pd
 
 from config import DATA_DIR
 from deliverability import deliverability_flags
+from mismatch_detection import apply_mismatch_to_row
+from sales_principles import evaluate_sales_principles
 from schemas import canonicalize_dataframe, canonicalize_row
 from taxonomy import (
     APP_SURFACE_TERMS,
@@ -52,10 +54,32 @@ SENDABILITY_COLUMNS = [
     "privacy_flags",
     "client_safe_asset_status",
     "sendability_dimensions",
+    "specificity_score",
+    "one_insight_score",
+    "friction_relevance_score",
+    "outcome_bridge_score",
+    "commercial_relevance_score",
+    "signal_to_implication_bridge_score",
+    "salesy_language_flag",
+    "fake_familiarity_flag",
+    "evidence_supported_claim_score",
+    "sales_principles_score",
+    "sales_principles_summary",
+    "sales_principles_reasons",
+    "recommended_opener",
+    "recommended_opener_option",
+    "recommended_opener_reason",
+    "selected_opener",
+    "selected_opener_source",
+    "edited_final_opener",
     "human_decision",
     "edited_line",
     "edit_reason_category",
     "edit_notes",
+    "company_website_mismatch",
+    "person_company_mismatch",
+    "input_mapping_warning",
+    "mismatch_reason",
 ]
 
 HUMAN_DECISIONS = ["unreviewed", "send", "edit", "reject"]
@@ -71,6 +95,7 @@ EDIT_REASON_CATEGORIES = [
     "too_long",
     "missing_outcome",
     "unsupported_claim",
+    "signal_to_implication_bridge",
     "bad_pitch_flow",
     "visual_evidence_uncertain",
     "surface_uncertain",
@@ -107,6 +132,44 @@ GOLDSET_COLUMNS = [
     "human_decision",
     "edit_reason_category",
     "edit_notes",
+    "recommended_opener",
+    "recommended_opener_option",
+    "recommended_opener_reason",
+    "selected_opener",
+    "selected_opener_source",
+    "edited_final_opener",
+    "non_selected_opener_options",
+    "opener_option_1",
+    "opener_option_1_angle",
+    "opener_option_1_evidence",
+    "opener_option_1_source_url",
+    "opener_option_1_sendability",
+    "opener_option_1_sendability_score",
+    "opener_option_1_quality_flags",
+    "opener_option_1_sales_principles_summary",
+    "opener_option_1_rejection_or_edit_reason",
+    "opener_option_2",
+    "opener_option_2_angle",
+    "opener_option_2_evidence",
+    "opener_option_2_source_url",
+    "opener_option_2_sendability",
+    "opener_option_2_sendability_score",
+    "opener_option_2_quality_flags",
+    "opener_option_2_sales_principles_summary",
+    "opener_option_2_rejection_or_edit_reason",
+    "opener_option_3",
+    "opener_option_3_angle",
+    "opener_option_3_evidence",
+    "opener_option_3_source_url",
+    "opener_option_3_sendability",
+    "opener_option_3_sendability_score",
+    "opener_option_3_quality_flags",
+    "opener_option_3_sales_principles_summary",
+    "opener_option_3_rejection_or_edit_reason",
+    "sales_principles_score",
+    "sales_principles_summary",
+    "sales_principles_reasons",
+    "signal_to_implication_bridge_score",
     "sendability_decision",
     "sendability_score",
     "sendability_reasons",
@@ -129,6 +192,10 @@ GOLDSET_COLUMNS = [
     "evidence_found",
     "evidence_refs",
     "quality_flags",
+    "company_website_mismatch",
+    "person_company_mismatch",
+    "input_mapping_warning",
+    "mismatch_reason",
     "visual_confidence",
     "friction_type",
     "surface_used",
@@ -180,6 +247,19 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
+def _has_assertive_claim_language(line: str) -> bool:
+    lowered = line.lower()
+    patterns = [
+        "i bet",
+        "that's costing",
+        "that is costing",
+        "almost certainly",
+        "likely causes",
+        "likely causing",
+    ]
+    return any(pattern in lowered for pattern in patterns)
+
+
 def _hash_parts(*values: Any) -> str:
     payload = "\n".join(_text(value).lower() for value in values if _text(value))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16] if payload else ""
@@ -191,12 +271,29 @@ def _series_or_blank(df: pd.DataFrame, column: str) -> pd.Series:
     return pd.Series([""] * len(df), index=df.index, dtype=str)
 
 
+def _line_from_mapping(row: Mapping[str, Any]) -> str:
+    for column in [
+        "edited_final_opener",
+        "selected_opener",
+        "recommended_opener",
+        "personalized_line",
+        "opening_line",
+        "current_opening_line",
+        "model_opening_line",
+    ]:
+        value = _text(row.get(column))
+        if value:
+            return value
+    return ""
+
+
 def ensure_line_provenance(df: pd.DataFrame) -> pd.DataFrame:
     """Add non-destructive line provenance columns used by review, evals and training."""
     out = df.copy()
-    current = _series_or_blank(out, "personalized_line")
-    if current.str.strip().eq("").all() and "opening_line" in out:
-        current = _series_or_blank(out, "opening_line")
+    current = _series_or_blank(out, "selected_opener")
+    for candidate_column in ["recommended_opener", "personalized_line", "opening_line", "current_opening_line"]:
+        candidate = _series_or_blank(out, candidate_column)
+        current = current.mask(current.str.strip().eq(""), candidate)
 
     original_candidates = [
         "model_opening_line",
@@ -219,11 +316,14 @@ def ensure_line_provenance(df: pd.DataFrame) -> pd.DataFrame:
     out["current_opening_line"] = current.mask(current.str.strip().eq(""), _series_or_blank(out, "current_opening_line"))
 
     human = _series_or_blank(out, "human_decision").str.lower()
-    edited = _series_or_blank(out, "edited_line")
+    edited = _series_or_blank(out, "edited_final_opener")
+    edited = edited.mask(edited.str.strip().eq(""), _series_or_blank(out, "edited_line"))
     final_line = out["current_opening_line"].copy()
     use_edit = human.isin({"send", "edit"}) & edited.str.strip().ne("")
     final_line = final_line.mask(use_edit, edited)
     out["final_delivery_line"] = final_line
+    if "edited_final_opener" not in out:
+        out["edited_final_opener"] = edited
 
     if "row_id" not in out or _series_or_blank(out, "row_id").str.strip().eq("").any():
         existing_row_id = _series_or_blank(out, "row_id")
@@ -294,7 +394,7 @@ def evaluate_evidence(row: Mapping[str, Any]) -> tuple[int, list[str], list[str]
 
 
 def evaluate_copy_quality(row: Mapping[str, Any]) -> tuple[int, list[str], list[str]]:
-    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    line = _line_from_mapping(row)
     quality_flags = _split_flags(row.get("quality_flags"))
     hard: list[str] = []
     soft: list[str] = []
@@ -336,7 +436,7 @@ def evaluate_copy_quality(row: Mapping[str, Any]) -> tuple[int, list[str], list[
 
 
 def evaluate_outcome_alignment(row: Mapping[str, Any]) -> tuple[int, list[str]]:
-    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    line = _line_from_mapping(row)
     outcome = _text(row.get("conversion_outcome"))
     combined = f"{line} {outcome}"
     if not line:
@@ -347,7 +447,7 @@ def evaluate_outcome_alignment(row: Mapping[str, Any]) -> tuple[int, list[str]]:
 
 
 def evaluate_template_fit(row: Mapping[str, Any]) -> tuple[int, list[str]]:
-    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    line = _line_from_mapping(row)
     if not line or line.startswith("["):
         return 0, ["missing_line"]
     penalties: list[int] = []
@@ -368,7 +468,7 @@ def evaluate_template_fit(row: Mapping[str, Any]) -> tuple[int, list[str]]:
 
 
 def evaluate_visual_reliability(row: Mapping[str, Any]) -> tuple[int, list[str]]:
-    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    line = _line_from_mapping(row)
     visual_confidence = _lower(row.get("visual_confidence"))
     visual_flags = _split_flags(row.get("visual_flags") or row.get("visual_quality_flags"))
     screenshots = _text(row.get("shareable_screenshots") or row.get("screenshots") or row.get("screenshot_paths"))
@@ -386,7 +486,7 @@ def evaluate_visual_reliability(row: Mapping[str, Any]) -> tuple[int, list[str]]
 
 
 def evaluate_viewport_scope(row: Mapping[str, Any]) -> tuple[str, int, list[str]]:
-    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    line = _line_from_mapping(row)
     blob = " ".join(
         [
             _text(row.get("shareable_screenshots")),
@@ -452,13 +552,23 @@ def evaluate_privacy(row: Mapping[str, Any]) -> tuple[str, str]:
 
 
 def evaluate_surface_correctness(row: Mapping[str, Any]) -> tuple[str, int, list[str], bool]:
-    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    line = _line_from_mapping(row)
     evidence = _text(row.get("evidence_found") or row.get("evidence_used_for_copy") or row.get("evidence_points"))
     surface_checked = _text(row.get("surface_checked"))
     research_priority = _text(row.get("research_priority"))
     product_surface = _lower(row.get("product_surface_type"))
     combined = f"{line} {evidence} {surface_checked} {research_priority}".lower()
     line_lower = line.lower()
+    source_urls = _lower(row.get("source_urls"))
+    app_evidence_blob = " ".join(
+        [
+            evidence,
+            source_urls,
+            _text(row.get("app_store_summary")),
+            _text(row.get("app_review_themes")),
+            _text(row.get("app_review_complaints")),
+        ]
+    ).lower()
 
     reasons: list[str] = []
     hard_wrong = False
@@ -466,15 +576,18 @@ def evaluate_surface_correctness(row: Mapping[str, Any]) -> tuple[str, int, list
         return "Unknown", 65, ["product_surface_type_missing"], False
 
     if product_surface == "app_first_product":
-        has_app_surface = _has_any(combined, APP_SURFACE_TERMS)
-        website_line = _has_any(line_lower, {"website", "landing page", "homepage", "blog"}) and "app" not in line_lower
+        has_app_surface = _has_any(combined, APP_SURFACE_TERMS) or "apps.apple.com" in source_urls or "play.google.com" in source_urls
+        app_evidence_available = _has_any(app_evidence_blob, APP_SURFACE_TERMS) or "apps.apple.com" in source_urls or "play.google.com" in source_urls
+        website_line = _has_any(line_lower, {"website", "landing page", "homepage", "blog"})
         if website_line:
-            reasons.append("app_first_product_but_line_uses_website_or_blog_surface")
-            hard_wrong = True
-            return "Wrong", 25, reasons, hard_wrong
+            reasons.append("website_surface_used_for_app_first_product")
+            if app_evidence_available:
+                reasons.append("app_review_evidence_preferred")
+                return "Review", 45, reasons, hard_wrong
+            return "Review", 58, reasons, hard_wrong
         if has_app_surface:
             return "Correct", 95, [], False
-        return "Review", 60, ["app_first_product_without_clear_app_surface"], False
+        return "Review", 55, ["app_first_requires_app_or_review_surface"], False
 
     if product_surface == "marketplace_booking_flow":
         if _has_any(combined, BOOKING_TERMS):
@@ -503,8 +616,8 @@ def evaluate_surface_correctness(row: Mapping[str, Any]) -> tuple[str, int, list
 
 
 def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
-    row = canonicalize_row(dict(row))
-    line = _text(row.get("personalized_line") or row.get("opening_line"))
+    row = apply_mismatch_to_row(canonicalize_row(dict(row)))
+    line = _line_from_mapping(row)
     status = _lower(row.get("status"))
     quality_flags = _split_flags(row.get("quality_flags"))
 
@@ -517,6 +630,14 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
     evidence_scope = evaluate_evidence_scope(row)
     privacy_flags, client_safe_asset_status = evaluate_privacy(row)
     surface_label, surface_score, surface_reasons, surface_hard = evaluate_surface_correctness(row)
+    sales_result = evaluate_sales_principles(
+        line,
+        evidence=_text(row.get("evidence_found") or row.get("evidence_used_for_copy") or row.get("evidence_points")),
+        source_url=_text(row.get("source_urls")),
+        angle=_text(row.get("chosen_angle") or row.get("friction_type")),
+        campaign_context=_text(row.get("campaign_context")),
+        manual_app_verified=bool(_text(row.get("app_flow_observation"))),
+    )
 
     hard_reasons: list[str] = []
     soft_reasons: list[str] = []
@@ -540,18 +661,41 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
     soft_reasons.extend(surface_reasons)
     if surface_hard:
         hard_reasons.extend(surface_reasons)
+    if sales_result.fake_familiarity_flag:
+        hard_reasons.append("fake_familiarity_claim")
+    if sales_result.evidence_supported_claim_score < 35:
+        hard_reasons.append("unsupported_meaningful_claim")
+    if sales_result.salesy_language_flag:
+        soft_reasons.append("salesy_language")
+    if sales_result.specificity_score < 55:
+        soft_reasons.append("low_specificity")
+    if sales_result.one_insight_score < 60:
+        soft_reasons.append("multiple_insights")
+    if sales_result.outcome_bridge_score < 60:
+        soft_reasons.append("missing_outcome_bridge")
+    if sales_result.commercial_relevance_score < 60:
+        soft_reasons.append("commercial_relevance_unclear")
+    if sales_result.signal_to_implication_bridge_score < 55:
+        soft_reasons.append("signal_to_implication_bridge_weak")
+    if any(reason.startswith("unsupported_implication") for reason in sales_result.sales_principles_reasons):
+        hard_reasons.append("unsupported_implication")
+    if _has_assertive_claim_language(line) and (evidence_score < 75 or visual_score < 60 or viewport_score < 60):
+        soft_reasons.append("assertive_claim_language_with_weak_evidence")
+    if str(row.get("input_mapping_warning", "")).lower() == "yes":
+        soft_reasons.append("input_mapping_warning")
 
     hard_reasons = _dedupe(hard_reasons)
     soft_reasons = _dedupe([reason for reason in soft_reasons if reason not in hard_reasons])
 
     weighted_score = round(
-        evidence_score * 0.25
-        + copy_score * 0.22
-        + outcome_score * 0.16
-        + template_score * 0.14
-        + surface_score * 0.16
-        + visual_score * 0.04
-        + viewport_score * 0.03
+        evidence_score * 0.20
+        + copy_score * 0.18
+        + outcome_score * 0.13
+        + template_score * 0.12
+        + surface_score * 0.13
+        + sales_result.sales_principles_score * 0.18
+        + visual_score * 0.035
+        + viewport_score * 0.025
     )
     if not line:
         weighted_score = min(weighted_score, 20)
@@ -571,7 +715,8 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
     reasons = _dedupe(hard_reasons + soft_reasons)
     dimensions = (
         f"evidence={evidence_score}; copy={copy_score}; outcome={outcome_score}; "
-        f"template={template_score}; surface={surface_score}; visual={visual_score}; viewport={viewport_score}"
+        f"template={template_score}; surface={surface_score}; sales_principles={sales_result.sales_principles_score}; "
+        f"signal_bridge={sales_result.signal_to_implication_bridge_score}; visual={visual_score}; viewport={viewport_score}"
     )
     return {
         "sendability_decision": decision,
@@ -594,6 +739,22 @@ def evaluate_sendability(row: Mapping[str, Any]) -> dict[str, Any]:
         "privacy_flags": privacy_flags,
         "client_safe_asset_status": client_safe_asset_status,
         "sendability_dimensions": dimensions,
+        "specificity_score": sales_result.specificity_score,
+        "one_insight_score": sales_result.one_insight_score,
+        "friction_relevance_score": sales_result.friction_relevance_score,
+        "outcome_bridge_score": sales_result.outcome_bridge_score,
+        "commercial_relevance_score": sales_result.commercial_relevance_score,
+        "signal_to_implication_bridge_score": sales_result.signal_to_implication_bridge_score,
+        "salesy_language_flag": "yes" if sales_result.salesy_language_flag else "no",
+        "fake_familiarity_flag": "yes" if sales_result.fake_familiarity_flag else "no",
+        "evidence_supported_claim_score": sales_result.evidence_supported_claim_score,
+        "sales_principles_score": sales_result.sales_principles_score,
+        "sales_principles_summary": sales_result.sales_principles_summary,
+        "sales_principles_reasons": " | ".join(sales_result.sales_principles_reasons),
+        "company_website_mismatch": row.get("company_website_mismatch", ""),
+        "person_company_mismatch": row.get("person_company_mismatch", ""),
+        "input_mapping_warning": row.get("input_mapping_warning", ""),
+        "mismatch_reason": row.get("mismatch_reason", ""),
     }
 
 
@@ -640,8 +801,8 @@ def goldset_paths() -> dict[str, Path]:
 
 def _preferred_line(row: Mapping[str, Any]) -> str:
     human_decision = _lower(row.get("human_decision"))
-    edited = _text(row.get("edited_line"))
-    current = _text(row.get("current_opening_line") or row.get("personalized_line") or row.get("opening_line"))
+    edited = _text(row.get("edited_final_opener") or row.get("edited_line"))
+    current = _text(row.get("selected_opener") or row.get("current_opening_line") or row.get("personalized_line") or row.get("opening_line"))
     final = _text(row.get("final_delivery_line"))
     if human_decision in {"send", "edit"}:
         return edited or final or current
@@ -650,8 +811,8 @@ def _preferred_line(row: Mapping[str, Any]) -> str:
 
 def _non_preferred_line(row: Mapping[str, Any]) -> str:
     human_decision = _lower(row.get("human_decision"))
-    edited = _text(row.get("edited_line"))
-    original = _text(row.get("model_opening_line") or row.get("original_line") or row.get("personalized_line") or row.get("opening_line"))
+    edited = _text(row.get("edited_final_opener") or row.get("edited_line"))
+    original = _text(row.get("model_opening_line") or row.get("original_line") or row.get("selected_opener") or row.get("personalized_line") or row.get("opening_line"))
     if human_decision == "reject":
         return original
     if edited and edited != original:
@@ -680,9 +841,23 @@ def rows_for_goldset(df: pd.DataFrame, split: str = "reviewed_examples") -> pd.D
     selected["is_training_candidate"] = "yes" if split == "candidate_training_set" else "no"
     selected["original_line"] = selected.get("model_opening_line", selected.get("personalized_line", ""))
     selected["current_opening_line"] = selected.get("current_opening_line", selected.get("personalized_line", ""))
-    selected["final_delivery_line"] = selected.get("final_delivery_line", selected.get("edited_line", ""))
+    selected["selected_opener"] = selected.get("selected_opener", selected.get("recommended_opener", selected.get("personalized_line", "")))
+    selected["edited_final_opener"] = selected.get("edited_final_opener", selected.get("edited_line", ""))
+    selected["final_delivery_line"] = selected.get("final_delivery_line", selected.get("edited_final_opener", selected.get("edited_line", "")))
     selected["preferred_line"] = selected.apply(lambda row: _preferred_line(row.to_dict()), axis=1)
     selected["non_preferred_line"] = selected.apply(lambda row: _non_preferred_line(row.to_dict()), axis=1)
+    selected["non_selected_opener_options"] = selected.apply(
+        lambda row: " | ".join(
+            option
+            for option in [
+                _text(row.get("opener_option_1") or row.get("option_1_line")),
+                _text(row.get("opener_option_2") or row.get("option_2_line")),
+                _text(row.get("opener_option_3") or row.get("option_3_line")),
+            ]
+            if option and option != _text(row.get("selected_opener"))
+        ),
+        axis=1,
+    )
     selected["surface_used"] = selected.get("surface_checked", "")
     selected["product_type"] = selected.get("product_surface_type", "")
     source_urls = selected["source_urls"].astype(str) if "source_urls" in selected else pd.Series([""] * len(selected), index=selected.index)
@@ -693,7 +868,7 @@ def rows_for_goldset(df: pd.DataFrame, split: str = "reviewed_examples") -> pd.D
     )
     selected["evidence_refs"] = source_urls + " | " + screenshots
     selected["writer_model"] = selected.get("model_name", "")
-    selected["judge_model"] = "deterministic_sendability_gate_v2"
+    selected["judge_model"] = "deterministic_sendability_gate_v3_sales_principles"
     for column in GOLDSET_COLUMNS:
         if column not in selected:
             selected[column] = ""

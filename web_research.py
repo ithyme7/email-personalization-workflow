@@ -185,17 +185,21 @@ def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
     homepage = _fetch_page(lead.website_url, settings)
     rendered_homepage_links: list[str] = []
     renderer: BrowserRenderer | None = None
+    renderer_unavailable = False
 
     def get_renderer() -> BrowserRenderer | None:
-        nonlocal renderer
+        nonlocal renderer, renderer_unavailable
         if renderer:
             return renderer
+        if renderer_unavailable:
+            return None
         if not browser_rendering_enabled(settings):
             return None
         try:
             renderer = BrowserRenderer(settings).__enter__()
             return renderer
         except Exception as exc:
+            renderer_unavailable = True
             logging.warning("Browser-rendered fallback unavailable: %s", exc)
             result.reviewer_notes.append(f"Browser-rendered fallback unavailable: {exc}")
             return None

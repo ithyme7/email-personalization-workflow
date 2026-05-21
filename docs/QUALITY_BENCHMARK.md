@@ -16,6 +16,10 @@ Track per batch:
 - rows with source URLs
 - rows with high/medium/low visual confidence
 - rows requiring app walkthrough
+- leads with `no_sendable_option`
+- average per-option sendability score
+- average per-option sales-principles score
+- share of selected openers from option 1, 2, 3, or custom
 
 ## Human Review Metrics
 
@@ -37,6 +41,20 @@ Score every sampled line 1 to 5:
 3. Usable with edit: evidence-backed but tone needs work.
 4. Good: specific, natural, and tied to outcome.
 5. Excellent: feels manually researched and naturally fits the template.
+
+For multi-shot batches, score each option separately before judging the row. A weak option should not inherit the score of a stronger option on the same lead.
+
+## Sales-Principles Checks
+
+The deterministic sales-principles layer is a compact rubric, not copied sales-book content. It checks:
+
+- concrete specificity over cleverness
+- one clear insight
+- friction/proof/positioning relevance over generic praise
+- natural bridge to drop-off, activation, conversion, bookings, retention, trust, or user behaviour
+- no fake app familiarity
+- low salesiness
+- evidence before claim
 
 ## Improvement Loop
 

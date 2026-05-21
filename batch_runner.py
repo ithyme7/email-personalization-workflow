@@ -11,16 +11,23 @@ from angle_selector import evidence_for_selected_angle, select_angle
 from config import ensure_directories, load_settings
 from deep_research import collect_deep_research
 from evidence_extractor import evidence_to_payload, extract_evidence
-from export import export_client_batch_rows, export_rows, export_sending_tool_rows
+from export import export_client_batch_rows, export_delivery_rows, export_rows, export_sending_tool_rows
+from email_verification import verify_lead_email
 from input_loader import dedupe_key, load_leads
+from lead_quality import LeadQualityContext, build_lead_quality_context, evaluate_lead_quality
 from llm_client import LLMClient
+from mismatch_detection import apply_mismatch_to_row
 from models import EvidenceFact, EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
+from copy_guardrails import soften_draft_for_weak_evidence
 from personalization_writer import write_personalization
 from preflight import has_blocking_failures, preflight_summary, run_preflight
 from prompt_versions import prompt_hashes, tone_profile_hash
 from quality_checker import check_quality
+from research_tasks import recommended_research_context, run_research_tasks
 from run_history import append_generated_email_rows
+from sales_principles import SalesPrinciplesResult, evaluate_sales_principles
 from schemas import stable_hash
+from sendability import evaluate_sendability
 from surface_classifier import classify_surface, is_app_first, research_priority_for
 from tone_profiles import load_tone_profile
 from web_research import research_company
@@ -56,6 +63,12 @@ SERIOUS_QUALITY_FLAGS = {
     "low_confidence_visual_finding",
     "technical_audit_language",
     "download_claim",
+    "fake_familiarity_claim",
+    "unsupported_meaningful_claim",
+    "unsupported_implication",
+    "input_mapping_warning",
+    "salesy_language",
+    "low_specificity",
     "company_name_not_lowercase",
 }
 
@@ -69,7 +82,9 @@ def _emit_progress(progress_callback: ProgressCallback | None, **payload: Any) -
         logging.debug("Progress callback failed", exc_info=True)
 
 
-def _base_row(lead: LeadInput) -> dict[str, Any]:
+def _base_row(lead: LeadInput, lead_quality_context: LeadQualityContext | None = None) -> dict[str, Any]:
+    email_verification = verify_lead_email(lead.original_columns)
+    lead_quality = evaluate_lead_quality(lead, lead_quality_context, email_verification)
     row = {
         "company_name": lead.company_name,
         "website_url": lead.website_url,
@@ -91,8 +106,40 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "friction_checklist": "",
         "app_check_status": "",
         "recommended_manual_check": "",
+        "lead_quality_score": lead_quality.lead_quality_score,
+        "lead_quality_flags": join_list(lead_quality.lead_quality_flags),
+        "missing_required_fields": join_list(lead_quality.missing_required_fields),
+        "duplicate_company": lead_quality.duplicate_company,
+        "duplicate_contact": lead_quality.duplicate_contact,
+        "app_link_status": lead_quality.app_link_status,
+        "ready_for_personalization": lead_quality.ready_for_personalization,
+        "lead_quality_notes": lead_quality.lead_quality_notes,
+        "email_verification_status": email_verification.status,
+        "email_verification_confidence": email_verification.confidence,
+        "email_verification_reason": email_verification.reason,
+        "company_website_mismatch": "",
+        "person_company_mismatch": "",
+        "input_mapping_warning": "",
+        "mismatch_reason": "",
         "product_surface_type": "",
         "research_priority": "",
+        "research_revenue_model": "",
+        "research_revenue_model_confidence": "",
+        "research_revenue_model_evidence": "",
+        "research_revenue_model_source_url": "",
+        "research_target_customer": "",
+        "research_target_customer_confidence": "",
+        "research_target_customer_evidence": "",
+        "research_target_customer_source_url": "",
+        "research_website_tech_stack": "",
+        "research_website_tech_stack_confidence": "",
+        "research_website_tech_stack_evidence": "",
+        "research_latest_funding_details": "",
+        "research_latest_funding_confidence": "",
+        "research_latest_funding_source_url": "",
+        "research_traffic_summary": "",
+        "research_traffic_confidence": "",
+        "research_traffic_source": "",
         "app_review_complaints": "",
         "template_preview": "",
         "visual_observations": "",
@@ -121,6 +168,15 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "chosen_angle": "",
         "opening_line": "",
         "tailored_insight": "",
+        "opener_option_1": "",
+        "opener_option_1_angle": "",
+        "opener_option_1_evidence": "",
+        "opener_option_1_source_url": "",
+        "opener_option_1_sendability": "",
+        "opener_option_1_sendability_score": "",
+        "opener_option_1_quality_flags": "",
+        "opener_option_1_sales_principles_summary": "",
+        "opener_option_1_rejection_or_edit_reason": "",
         "opening_line_option_1": "",
         "tailored_insight_option_1": "",
         "chosen_angle_option_1": "",
@@ -130,6 +186,15 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "needs_manual_review_option_1": "",
         "reviewer_notes_option_1": "",
         "template_preview_option_1": "",
+        "opener_option_2": "",
+        "opener_option_2_angle": "",
+        "opener_option_2_evidence": "",
+        "opener_option_2_source_url": "",
+        "opener_option_2_sendability": "",
+        "opener_option_2_sendability_score": "",
+        "opener_option_2_quality_flags": "",
+        "opener_option_2_sales_principles_summary": "",
+        "opener_option_2_rejection_or_edit_reason": "",
         "opening_line_option_2": "",
         "tailored_insight_option_2": "",
         "chosen_angle_option_2": "",
@@ -139,6 +204,15 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "needs_manual_review_option_2": "",
         "reviewer_notes_option_2": "",
         "template_preview_option_2": "",
+        "opener_option_3": "",
+        "opener_option_3_angle": "",
+        "opener_option_3_evidence": "",
+        "opener_option_3_source_url": "",
+        "opener_option_3_sendability": "",
+        "opener_option_3_sendability_score": "",
+        "opener_option_3_quality_flags": "",
+        "opener_option_3_sales_principles_summary": "",
+        "opener_option_3_rejection_or_edit_reason": "",
         "opening_line_option_3": "",
         "tailored_insight_option_3": "",
         "chosen_angle_option_3": "",
@@ -148,6 +222,27 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "needs_manual_review_option_3": "",
         "reviewer_notes_option_3": "",
         "template_preview_option_3": "",
+        "recommended_opener": "",
+        "recommended_opener_option": "",
+        "recommended_opener_reason": "",
+        "selected_opener": "",
+        "selected_opener_source": "",
+        "edited_final_opener": "",
+        "human_decision": "unreviewed",
+        "edit_reason_category": "not_reviewed",
+        "edit_notes": "",
+        "specificity_score": "",
+        "one_insight_score": "",
+        "friction_relevance_score": "",
+        "outcome_bridge_score": "",
+        "commercial_relevance_score": "",
+        "signal_to_implication_bridge_score": "",
+        "salesy_language_flag": "",
+        "fake_familiarity_flag": "",
+        "evidence_supported_claim_score": "",
+        "sales_principles_score": "",
+        "sales_principles_summary": "",
+        "sales_principles_reasons": "",
         "prompt_set_hash": "",
         "evidence_prompt_hash": "",
         "write_prompt_hash": "",
@@ -157,7 +252,7 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "evidence_strength_score": "",
         "personalization_quality_score": "",
         "send_confidence": "review",
-        "quality_flags": "",
+        "quality_flags": join_list(lead_quality.lead_quality_flags),
         "source_urls": "",
         "needs_manual_review": True,
         "reviewer_notes": "",
@@ -244,6 +339,14 @@ def _set_surface_metadata(
     row["research_priority"] = research_priority_for(surface_type)
 
 
+def _apply_mismatch_flags(row: dict[str, Any]) -> dict[str, Any]:
+    row.update(apply_mismatch_to_row(row))
+    if str(row.get("input_mapping_warning", "")).lower() == "yes":
+        row["quality_flags"] = join_list([row.get("quality_flags", ""), "input_mapping_warning"])
+        row["needs_manual_review"] = True
+    return row
+
+
 def _manual_check_recommendation(
     lead: LeadInput,
     row: dict[str, Any],
@@ -278,15 +381,23 @@ def _manual_check_recommendation(
     return status, ""
 
 
-def _placeholder_row(lead: LeadInput, note: str) -> dict[str, Any]:
-    row = _base_row(lead)
+def _placeholder_row(
+    lead: LeadInput,
+    note: str,
+    lead_quality_context: LeadQualityContext | None = None,
+) -> dict[str, Any]:
+    row = _base_row(lead, lead_quality_context)
     row["quality_flags"] = "manual_review"
     row["reviewer_notes"] = join_list(lead.validation_errors + [note])
     return row
 
 
-def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[str, Any]:
-    row = _base_row(lead)
+def _offline_research_row(
+    lead: LeadInput,
+    deep_research_enabled: bool,
+    lead_quality_context: LeadQualityContext | None = None,
+) -> dict[str, Any]:
+    row = _base_row(lead, lead_quality_context)
     settings = load_settings()
     research = research_company(lead, settings)
     deep_research = None
@@ -314,6 +425,8 @@ def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[
             }
         )
     _set_surface_metadata(row, lead, research, deep_research)
+    research_fields = run_research_tasks(lead, research, settings)
+    row.update({key: value for key, value in research_fields.items() if not key.startswith("_")})
     if row["product_surface_type"] == "app_first_product":
         research.summary = join_list(
             [
@@ -337,6 +450,9 @@ def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[
     )
 
     evidence_parts: list[str] = []
+    research_context = recommended_research_context(research_fields)
+    if research_context:
+        evidence_parts.append("Structured enrichment usable for opener: " + research_context)
     for page in research.pages[:2]:
         excerpt = page.text[:700]
         evidence_parts.append(f"Source: {page.url}\nTitle: {page.title}\nText: {excerpt}")
@@ -388,8 +504,14 @@ def _offline_research_row(lead: LeadInput, deep_research_enabled: bool) -> dict[
     return row
 
 
-def _copy_personalization_for_contact(row: dict[str, Any], lead: LeadInput) -> dict[str, Any]:
+def _copy_personalization_for_contact(
+    row: dict[str, Any],
+    lead: LeadInput,
+    lead_quality_context: LeadQualityContext | None = None,
+) -> dict[str, Any]:
     copied = dict(row)
+    email_verification = verify_lead_email(lead.original_columns)
+    lead_quality = evaluate_lead_quality(lead, lead_quality_context, email_verification)
     copied.update(
         {
             "company_name": lead.company_name,
@@ -407,6 +529,17 @@ def _copy_personalization_for_contact(row: dict[str, Any], lead: LeadInput) -> d
             "recent_news_url": lead.recent_news_url,
             "recent_news_note": lead.recent_news_note,
             "competitor_context": lead.competitor_context,
+            "lead_quality_score": lead_quality.lead_quality_score,
+            "lead_quality_flags": join_list(lead_quality.lead_quality_flags),
+            "missing_required_fields": join_list(lead_quality.missing_required_fields),
+            "duplicate_company": lead_quality.duplicate_company,
+            "duplicate_contact": lead_quality.duplicate_contact,
+            "app_link_status": lead_quality.app_link_status,
+            "ready_for_personalization": lead_quality.ready_for_personalization,
+            "lead_quality_notes": lead_quality.lead_quality_notes,
+            "email_verification_status": email_verification.status,
+            "email_verification_confidence": email_verification.confidence,
+            "email_verification_reason": email_verification.reason,
         }
     )
     for key in list(copied.keys()):
@@ -423,6 +556,8 @@ def _copy_personalization_for_contact(row: dict[str, Any], lead: LeadInput) -> d
             lead,
             copied.get(f"opening_line_option_{index}", ""),
         )
+    copied["selected_opener"] = copied.get("recommended_opener", copied.get("opening_line", ""))
+    copied["selected_opener_source"] = copied.get("recommended_opener_option", "")
     app_check_status, manual_check = _manual_check_recommendation(lead, copied)
     copied["app_check_status"] = app_check_status
     copied["recommended_manual_check"] = manual_check
@@ -518,6 +653,7 @@ def _write_and_qc_variant(
         avoid_opening_lines=avoid_opening_lines,
         variant_instruction=variant_instruction,
     )
+    draft = soften_draft_for_weak_evidence(draft, evidence)
     qc = check_quality(client, lead, evidence, draft, tone_profile)
     if not qc.passed:
         rewrite_reasons = qc.reasons + qc.quality_flags
@@ -531,10 +667,79 @@ def _write_and_qc_variant(
             avoid_opening_lines=avoid_opening_lines + [draft.opening_line],
             variant_instruction=variant_instruction,
         )
+        rewritten = soften_draft_for_weak_evidence(rewritten, evidence)
         rewritten_qc = check_quality(client, lead, evidence, rewritten, tone_profile)
         if rewritten_qc.score >= qc.score:
             return rewritten, rewritten_qc
     return draft, qc
+
+
+def _sales_for_variant(
+    lead: LeadInput,
+    evidence: EvidenceResult,
+    draft: PersonalizationDraft,
+) -> SalesPrinciplesResult:
+    evidence_text = _format_evidence(evidence) or join_list(draft.evidence_used_for_copy)
+    source_urls = join_list([fact.source_url for fact in evidence.facts if fact.source_url])
+    return evaluate_sales_principles(
+        draft.opening_line,
+        evidence=evidence_text,
+        source_url=source_urls,
+        angle=draft.chosen_angle,
+        campaign_context=lead.campaign_context,
+        manual_app_verified=bool(lead.app_flow_observation.strip()),
+    )
+
+
+def _variant_sendability_row(
+    base_row: dict[str, Any],
+    draft: PersonalizationDraft,
+    qc: QCResult,
+    evidence: EvidenceResult,
+    sales: SalesPrinciplesResult,
+    needs_review: bool,
+) -> dict[str, Any]:
+    evidence_text = join_list(draft.evidence_used_for_copy) or _format_evidence(evidence)
+    source_urls = join_list([fact.source_url for fact in evidence.facts if fact.source_url])
+    quality_flags = join_list(
+        [
+            base_row.get("quality_flags", ""),
+            join_list(qc.quality_flags),
+            "fake_familiarity_claim" if sales.fake_familiarity_flag else "",
+            "salesy_language" if sales.salesy_language_flag else "",
+            "unsupported_meaningful_claim" if sales.evidence_supported_claim_score < 35 else "",
+            "multiple_insights" if sales.one_insight_score < 60 else "",
+            "missing_outcome_bridge" if sales.outcome_bridge_score < 60 else "",
+        ]
+    )
+    row = dict(base_row)
+    row.update(
+        {
+            "personalized_line": draft.opening_line,
+            "opening_line": draft.opening_line,
+            "current_opening_line": draft.opening_line,
+            "selected_opener": draft.opening_line,
+            "chosen_angle": draft.chosen_angle,
+            "evidence_used_for_copy": evidence_text,
+            "evidence_found": evidence_text,
+            "source_urls": source_urls or base_row.get("source_urls", ""),
+            "quality_flags": quality_flags,
+            "needs_manual_review": needs_review,
+            "specificity_score": sales.specificity_score,
+            "one_insight_score": sales.one_insight_score,
+            "friction_relevance_score": sales.friction_relevance_score,
+            "outcome_bridge_score": sales.outcome_bridge_score,
+            "commercial_relevance_score": sales.commercial_relevance_score,
+            "signal_to_implication_bridge_score": sales.signal_to_implication_bridge_score,
+            "salesy_language_flag": "yes" if sales.salesy_language_flag else "no",
+            "fake_familiarity_flag": "yes" if sales.fake_familiarity_flag else "no",
+            "evidence_supported_claim_score": sales.evidence_supported_claim_score,
+            "sales_principles_score": sales.sales_principles_score,
+            "sales_principles_summary": sales.sales_principles_summary,
+            "sales_principles_reasons": join_list(sales.sales_principles_reasons),
+        }
+    )
+    return row
 
 
 def _store_variant(
@@ -543,32 +748,104 @@ def _store_variant(
     index: int,
     draft: PersonalizationDraft,
     qc: QCResult,
+    evidence: EvidenceResult,
+    sales: SalesPrinciplesResult,
+    sendability: dict[str, Any],
     needs_review: bool,
 ) -> None:
+    evidence_text = join_list(draft.evidence_used_for_copy) or _format_evidence(evidence)
+    source_urls = join_list([fact.source_url for fact in evidence.facts if fact.source_url])
+    rejection_or_edit_reason = join_list(
+        [
+            sendability.get("hard_fail_reasons", ""),
+            sendability.get("soft_edit_reasons", ""),
+            join_list(sales.sales_principles_reasons),
+        ]
+    )
+    quality_flags = join_list(
+        [
+            join_list(qc.quality_flags),
+            sendability.get("hard_fail_reasons", ""),
+            sendability.get("soft_edit_reasons", ""),
+        ]
+    )
+    row[f"opener_option_{index}"] = draft.opening_line
+    row[f"opener_option_{index}_angle"] = draft.chosen_angle
+    row[f"opener_option_{index}_evidence"] = evidence_text
+    row[f"opener_option_{index}_source_url"] = source_urls
+    row[f"opener_option_{index}_sendability"] = sendability.get("sendability_decision", "")
+    row[f"opener_option_{index}_sendability_score"] = sendability.get("sendability_score", "")
+    row[f"opener_option_{index}_quality_flags"] = quality_flags
+    row[f"opener_option_{index}_sales_principles_summary"] = sales.sales_principles_summary
+    row[f"opener_option_{index}_rejection_or_edit_reason"] = rejection_or_edit_reason
     row[f"opening_line_option_{index}"] = draft.opening_line
     row[f"tailored_insight_option_{index}"] = draft.tailored_insight
     row[f"chosen_angle_option_{index}"] = draft.chosen_angle
-    row[f"evidence_used_for_copy_option_{index}"] = join_list(draft.evidence_used_for_copy)
+    row[f"evidence_used_for_copy_option_{index}"] = evidence_text
     row[f"confidence_score_option_{index}"] = qc.score
-    row[f"quality_flags_option_{index}"] = join_list(qc.quality_flags)
+    row[f"quality_flags_option_{index}"] = quality_flags
     row[f"needs_manual_review_option_{index}"] = needs_review
-    row[f"reviewer_notes_option_{index}"] = join_list(qc.reasons)
+    row[f"reviewer_notes_option_{index}"] = join_list([join_list(qc.reasons), rejection_or_edit_reason])
     row[f"template_preview_option_{index}"] = _template_preview(lead, draft.opening_line)
 
 
-def _best_variant_index(variants: list[tuple[int, PersonalizationDraft, QCResult, bool]]) -> int:
+def _best_variant_index(variants: list[dict[str, Any]]) -> int:
     if not variants:
         return 0
     ordered = sorted(
         variants,
         key=lambda item: (
-            item[3],
-            -item[2].score,
-            bool(SERIOUS_QUALITY_FLAGS.intersection(set(item[2].quality_flags))),
-            item[0],
+            str(item["sendability"].get("sendability_decision", "")) != "Send",
+            item["needs_review"],
+            -int(item["sendability"].get("sendability_score", 0) or 0),
+            -int(item["sales"].sales_principles_score),
+            -int(item["qc"].score),
+            bool(SERIOUS_QUALITY_FLAGS.intersection(set(item["qc"].quality_flags))),
+            item["index"],
         ),
     )
-    return ordered[0][0]
+    return int(ordered[0]["index"])
+
+
+def _select_recommended_opener(row: dict[str, Any], variants: list[dict[str, Any]]) -> None:
+    if not variants:
+        row["recommended_opener"] = ""
+        row["recommended_opener_option"] = "no_sendable_option"
+        row["recommended_opener_reason"] = "No opener options were generated."
+        row["selected_opener"] = ""
+        row["selected_opener_source"] = ""
+        return
+    best_index = _best_variant_index(variants)
+    best = next(item for item in variants if item["index"] == best_index)
+    sendability = best["sendability"]
+    sales = best["sales"]
+    decision = str(sendability.get("sendability_decision", ""))
+    score = int(sendability.get("sendability_score", 0) or 0)
+    hard_reasons = str(sendability.get("hard_fail_reasons", "") or "").strip()
+    if decision != "Send" or score < 85 or hard_reasons:
+        row["recommended_opener"] = ""
+        row["recommended_opener_option"] = "no_sendable_option"
+        row["recommended_opener_reason"] = join_list(
+            [
+                "No option cleared the sendability threshold.",
+                f"Best option was option_{best_index} with {decision} ({score}/100).",
+                hard_reasons,
+                sendability.get("soft_edit_reasons", ""),
+            ]
+        )
+        row["selected_opener"] = ""
+        row["selected_opener_source"] = ""
+        return
+    row["recommended_opener"] = best["draft"].opening_line
+    row["recommended_opener_option"] = f"option_{best_index}"
+    row["recommended_opener_reason"] = join_list(
+        [
+            f"Option {best_index} had the strongest evidence, sendability {score}/100, and sales-principles {sales.sales_principles_score}/100.",
+            sendability.get("sales_principles_summary", ""),
+        ]
+    )
+    row["selected_opener"] = row["recommended_opener"]
+    row["selected_opener_source"] = row["recommended_opener_option"]
 
 
 def _process_valid_lead(
@@ -577,8 +854,25 @@ def _process_valid_lead(
     manual_review_mode: bool,
     deep_research_enabled: bool,
     tone_profile_name: str,
+    lead_quality_context: LeadQualityContext | None = None,
 ) -> dict[str, Any]:
-    row = _base_row(lead)
+    row = _base_row(lead, lead_quality_context)
+    row = _apply_mismatch_flags(row)
+    if str(row.get("input_mapping_warning", "")).lower() == "yes":
+        row["quality_flags"] = join_list([row.get("quality_flags", ""), "pre_run_input_mapping_warning"])
+        row["reviewer_notes"] = join_list(
+            [
+                row.get("reviewer_notes", ""),
+                "Skipped expensive research/generation because company/contact/website mapping looks inconsistent.",
+                row.get("mismatch_reason", ""),
+            ]
+        )
+        row["needs_manual_review"] = True
+        row["send_confidence"] = "review"
+        app_check_status, manual_check = _manual_check_recommendation(lead, row, None)
+        row["app_check_status"] = app_check_status
+        row["recommended_manual_check"] = manual_check
+        return row
 
     research = research_company(lead, client.settings)
     deep_research = None
@@ -607,9 +901,13 @@ def _process_valid_lead(
             }
         )
     _set_surface_metadata(row, lead, research, deep_research)
+    research_fields = run_research_tasks(lead, research, client.settings)
+    row.update({key: value for key, value in research_fields.items() if not key.startswith("_")})
+    enrichment_context = recommended_research_context(research_fields)
     research.summary = join_list(
         [
             f"Product surface type: {row['product_surface_type']}. Research priority: {row['research_priority']}",
+            f"Structured enrichment usable for opener: {enrichment_context}" if enrichment_context else "",
             research.summary,
         ]
     )
@@ -645,7 +943,7 @@ def _process_valid_lead(
             app_check_status, manual_check = _manual_check_recommendation(lead, row, research)
             row["app_check_status"] = app_check_status
             row["recommended_manual_check"] = manual_check
-            return row
+            return _apply_mismatch_flags(row)
         raise RuntimeError(f"Research failed for {lead.company_name}: {row['reviewer_notes']}")
 
     tone_profile = load_tone_profile(tone_profile_name)
@@ -684,7 +982,7 @@ def _process_valid_lead(
             app_check_status, manual_check = _manual_check_recommendation(lead, row, research)
             row["app_check_status"] = app_check_status
             row["recommended_manual_check"] = manual_check
-            return row
+            return _apply_mismatch_flags(row)
         raise RuntimeError(f"Evidence extraction failed for {lead.company_name}: {row['reviewer_notes']}")
 
     if selection.selected_fact is None:
@@ -697,12 +995,12 @@ def _process_valid_lead(
         app_check_status, manual_check = _manual_check_recommendation(lead, row, research)
         row["app_check_status"] = app_check_status
         row["recommended_manual_check"] = manual_check
-        return row
+        return _apply_mismatch_flags(row)
 
     variant_facts = selection.allowed_facts[: client.settings.personalization_options]
     while variant_facts and len(variant_facts) < client.settings.personalization_options:
         variant_facts.append(variant_facts[-1])
-    variants: list[tuple[int, PersonalizationDraft, QCResult, bool]] = []
+    variants: list[dict[str, Any]] = []
     avoid_opening_lines: list[str] = []
     variant_instructions = [
         "Option 1: choose the strongest sendable friction angle.",
@@ -729,8 +1027,23 @@ def _process_valid_lead(
             or qc.score < 8
             or bool(SERIOUS_QUALITY_FLAGS.intersection(variant_flags))
         )
-        _store_variant(row, lead, variant_index, draft, qc, variant_needs_review)
-        variants.append((variant_index, draft, qc, variant_needs_review))
+        sales = _sales_for_variant(lead, variant_evidence, draft)
+        variant_sendability_row = _variant_sendability_row(row, draft, qc, variant_evidence, sales, variant_needs_review)
+        sendability = evaluate_sendability(variant_sendability_row)
+        if sendability.get("sendability_decision") != "Send":
+            variant_needs_review = True
+        _store_variant(row, lead, variant_index, draft, qc, variant_evidence, sales, sendability, variant_needs_review)
+        variants.append(
+            {
+                "index": variant_index,
+                "draft": draft,
+                "qc": qc,
+                "sales": sales,
+                "sendability": sendability,
+                "needs_review": variant_needs_review,
+                "evidence": variant_evidence,
+            }
+        )
         if draft.opening_line:
             avoid_opening_lines.append(draft.opening_line)
 
@@ -739,8 +1052,16 @@ def _process_valid_lead(
         draft = PersonalizationDraft()
         qc = QCResult(score=0, passed=False, reasons=["No personalization options were generated"], quality_flags=["manual_review_needed"])
         needs_review = True
+        sales = evaluate_sales_principles("")
+        sendability = evaluate_sendability({"personalized_line": "", "quality_flags": "manual_review_needed"})
     else:
-        _, draft, qc, needs_review = next(item for item in variants if item[0] == best_index)
+        best_variant = next(item for item in variants if item["index"] == best_index)
+        draft = best_variant["draft"]
+        qc = best_variant["qc"]
+        sales = best_variant["sales"]
+        sendability = best_variant["sendability"]
+        needs_review = best_variant["needs_review"]
+    _select_recommended_opener(row, variants)
 
     existing_flags = {
         flag.strip()
@@ -748,6 +1069,12 @@ def _process_valid_lead(
         if flag.strip()
     }
     combined_flags = existing_flags.union(set(selection.quality_flags)).union(set(qc.quality_flags))
+    if sales.fake_familiarity_flag:
+        combined_flags.add("fake_familiarity_claim")
+    if sales.salesy_language_flag:
+        combined_flags.add("salesy_language")
+    if sales.evidence_supported_claim_score < 35:
+        combined_flags.add("unsupported_meaningful_claim")
     needs_review = needs_review or bool(SERIOUS_QUALITY_FLAGS.intersection(combined_flags))
 
     notes = research.reviewer_notes + evidence.reviewer_notes + selection.reviewer_notes + qc.reasons
@@ -761,18 +1088,33 @@ def _process_valid_lead(
             "confidence_score": qc.score,
             "evidence_strength_score": evidence_strength_score,
             "personalization_quality_score": qc.score,
-            "send_confidence": "send" if not needs_review and evidence_strength_score >= 3 else "review",
+            "send_confidence": "send" if row.get("recommended_opener") and not needs_review and evidence_strength_score >= 3 else "review",
             "quality_flags": join_list(
-                [row.get("quality_flags", ""), join_list(selection.quality_flags), join_list(qc.quality_flags)]
+                [row.get("quality_flags", ""), join_list(selection.quality_flags), join_list(combined_flags)]
             ),
             "needs_manual_review": needs_review,
             "reviewer_notes": join_list(notes),
+            "specificity_score": sales.specificity_score,
+            "one_insight_score": sales.one_insight_score,
+            "friction_relevance_score": sales.friction_relevance_score,
+            "outcome_bridge_score": sales.outcome_bridge_score,
+            "commercial_relevance_score": sales.commercial_relevance_score,
+            "signal_to_implication_bridge_score": sales.signal_to_implication_bridge_score,
+            "salesy_language_flag": "yes" if sales.salesy_language_flag else "no",
+            "fake_familiarity_flag": "yes" if sales.fake_familiarity_flag else "no",
+            "evidence_supported_claim_score": sales.evidence_supported_claim_score,
+            "sales_principles_score": sales.sales_principles_score,
+            "sales_principles_summary": sales.sales_principles_summary,
+            "sales_principles_reasons": join_list(sales.sales_principles_reasons),
         }
     )
+    if not row.get("recommended_opener"):
+        row["needs_manual_review"] = True
+        row["quality_flags"] = join_list([row.get("quality_flags", ""), "no_sendable_option"])
     app_check_status, manual_check = _manual_check_recommendation(lead, row, research)
     row["app_check_status"] = app_check_status
     row["recommended_manual_check"] = manual_check
-    return row
+    return _apply_mismatch_flags(row)
 
 
 def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | None = None) -> list[dict[str, Any]]:
@@ -789,6 +1131,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         if has_blocking_failures(checks):
             raise RuntimeError("Pre-flight system check failed:\n" + preflight_summary(checks))
     leads = load_leads(args.input, args.campaign_context, deduplicate=not args.reuse_duplicate_personalization)
+    lead_quality_context = build_lead_quality_context(leads)
     total = len(leads)
     _emit_progress(
         progress_callback,
@@ -840,7 +1183,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         if not lead.is_valid:
             rows.append(
                 _attach_run_metadata(
-                    _placeholder_row(lead, "Row was not processed because input validation failed"),
+                    _placeholder_row(lead, "Row was not processed because input validation failed", lead_quality_context),
                     client,
                     tone_profile_name,
                     prompt_meta,
@@ -861,7 +1204,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         if args.reuse_duplicate_personalization and key in processed_by_key:
             rows.append(
                 _attach_run_metadata(
-                    _copy_personalization_for_contact(processed_by_key[key], lead),
+                    _copy_personalization_for_contact(processed_by_key[key], lead, lead_quality_context),
                     client,
                     tone_profile_name,
                     prompt_meta,
@@ -879,7 +1222,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
             )
             continue
         if not ai_available:
-            row = _offline_research_row(lead, args.deep_research)
+            row = _offline_research_row(lead, args.deep_research, lead_quality_context)
             row["reviewer_notes"] = join_list([row.get("reviewer_notes", ""), ai_unavailable_note])
             row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
             rows.append(row)
@@ -895,7 +1238,14 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
             )
             continue
         try:
-            row = _process_valid_lead(client, lead, args.manual_review_mode, args.deep_research, tone_profile_name)
+            row = _process_valid_lead(
+                client,
+                lead,
+                args.manual_review_mode,
+                args.deep_research,
+                tone_profile_name,
+                lead_quality_context,
+            )
             row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
             rows.append(row)
             processed_by_key[key] = row
@@ -911,7 +1261,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         except Exception as exc:
             logging.exception("Failed to process %s", lead.company_name)
             if args.manual_review_mode:
-                row = _placeholder_row(lead, f"Processing failed: {exc}")
+                row = _placeholder_row(lead, f"Processing failed: {exc}", lead_quality_context)
                 row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
                 rows.append(row)
                 processed_by_key[key] = row
@@ -953,6 +1303,10 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
     )
     if args.client_batch_output:
         export_client_batch_rows(rows, args.output)
+        output_path = Path(args.output)
+        delivery_output = output_path.with_name(f"{output_path.stem}_delivery_export{output_path.suffix}")
+        review_needed_output = output_path.with_name(f"{output_path.stem}_review_needed{output_path.suffix}")
+        export_delivery_rows(rows, delivery_output, review_needed_output)
     else:
         export_rows(rows, args.output)
     sending_preset = str(getattr(args, "sending_tool_preset", "") or "").strip()

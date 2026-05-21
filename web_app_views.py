@@ -16,7 +16,7 @@ def render_eval_tab() -> None:
     summary, detail = evaluate_frozen_goldset()
     if detail.empty:
         st.info("No frozen eval set yet. Save reviewed rows to `frozen_eval_set` from the Review & Edit tab first.")
-        st.dataframe(summary, use_container_width=True, hide_index=True)
+        st.dataframe(summary.astype(str), use_container_width=True, hide_index=True)
         return
 
     metrics = {str(row["metric"]): row["value"] for _, row in summary.iterrows()}
@@ -32,7 +32,7 @@ def render_eval_tab() -> None:
         st.error("Release gate fails. Fix these before treating this version as production-ready.")
         st.write("\n".join(f"- {failure}" for failure in gate_failures))
     st.markdown("**Eval summary**")
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.dataframe(summary.astype(str), use_container_width=True, hide_index=True)
     left, right = st.columns(2)
     with left:
         st.markdown("**Gate decisions**")

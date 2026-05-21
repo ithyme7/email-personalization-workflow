@@ -15,6 +15,7 @@ Hey [Name]
 In a recent app project, session replays showed users bouncing off a paywall because the copy was unclear. After the paywall was rewritten, conversion improved materially.
 
 The opening line must prime the reader for drop-off, activation, bookings, signup completion, churn, paywall friction, retention, or conversion. It should feel like the sender actually checked the app or page.
+Use a signal-to-implication bridge: concrete observed signal -> plausible business implication -> relevant tension connected to the pitch. Do not stop at a surface observation. Do not invent the implication; it must be defensible from the supplied evidence.
 
 Angle priority:
 1. If there is a mobile app, app/onboarding evidence beats blog and generic website observations. Prefer Apple App Store evidence first when available, then Google Play, then screenshots, review complaints, onboarding permissions, signup requirement, paywall/subscription/access-code, then website/landing page.
@@ -33,14 +34,16 @@ Opening line rules:
 - One sentence only.
 - Ideally 22 to 38 words.
 - Natural, sharp, and human.
-- Open conversationally with a first-person surface check, for example "I was just checking out the [product] app...", "I opened the [product] app/listing...", "I was looking at the [product] App Store listing...", or "I was on the [product] website...".
+- Open conversationally with a first-person surface check, for example "I was just checking out the [product] app listing...", "I was looking at the [product] App Store listing...", "I was checking the public signup flow...", or "I was on the [product] website...".
 - Say "the [product] app" or "the [product] website" instead of "[domain] website."
-- Do not say "I downloaded the app", "I installed the app", or imply that the sender personally downloaded/installed it. Use "I opened", "I was checking out", or "I was looking at the App Store listing" unless a human reviewer supplied a manual app walkthrough note.
+- Do not say "I downloaded the app", "I installed the app", "I tried the app", "I loved using it", or "I opened the app" unless a human reviewer supplied a manual app walkthrough note. Prefer public-surface language such as "I was checking the app listing" or "I was looking at the App Store listing."
 - Keep company or product names lowercase in the opening line when the supplied name is lowercase. Do not title-case a company name just to make it look cleaner.
 - Lead with a specific bug, friction point, unclear step, dead button, onboarding issue, booking issue, paywall issue, weak proof point, or unclear first action when evidence supports it.
 - Tie the observation to a concrete outcome such as user drop-off, activation, conversion, retention, bookings, signup completion, first-session churn, or paywall conversion.
+- Bridge the signal to a plausible business implication or operational tension. Example pattern: "Saw [specific signal]; that could mean [business implication] without [relevant tension] slipping." Keep it natural and one sentence.
 - Make the line flow naturally into the required_next_sentence supplied in the payload.
-- Prefer a mild hypothesis when evidence supports it: "I'd guess...", "I bet...", "that probably...", "that could be costing...", "that feels like a place where..."
+- Prefer soft hypothesis language: "could be costing...", "might be creating...", "may be causing...", "could be adding friction...", or "could mean...".
+- Avoid "I bet", "I'd bet", "I'd guess", "that's costing", "almost certainly", or other assertive certainty unless the evidence is strong, direct, and current.
 - No generic praise.
 - No filler words such as powerful, impressive, interesting, or innovative.
 - Do not use "I love", "I was impressed by", "Hope you're well", "smooth experience", or "make the experience smoother".
@@ -60,12 +63,15 @@ Opening line rules:
 - If the best visual finding is marked low-confidence, do not present it as a confirmed issue. Either use a stronger evidence-backed angle or keep the line conservative for manual review.
 
 Tone examples:
-- Good: "I opened the fitrooms app and noticed the booking flow takes a few taps before you see available slots, I'd guess that's costing you bookings from users who open the app intending to book soon."
-- Good: "I opened the FocusBoard app and got hit with calendar, tasks, notes, and health widgets on the first screen, I bet some new users churn because there is no obvious place to start."
+- Good: "I was checking the fitrooms app listing and the booking flow looks like it takes a few taps before slots appear, which could add friction for users trying to book soon."
+- Good: "I was checking the FocusBoard onboarding evidence and the first screen introduces calendar, tasks, notes, and health widgets at once, which could make activation harder before users find where to start."
+- Good signal bridge: "Saw you are hiring SDRs; usually that means the team is trying to increase outbound volume without letting quality collapse."
 - Good: "I was on the SleepWorks website and noticed the case study links go to external sources rather than direct customer quotes on the page, pulling those quotes closer to the CTA would likely lift conversion."
-- Good: "I was checking out the RunTrail website and saw the main CTA blends into the background colour, I'd bet that is costing you signups."
-- Good: "I was on the Journally website and noticed social login is hidden until you scroll on the signup page, I'd bet that is hurting signup completion."
+- Good: "I was checking out the RunTrail website and saw the main CTA blends into the background colour, which could be costing you signups."
+- Good: "I was on the Journally website and noticed social login is hidden until you scroll on the signup page, which could be adding signup friction."
 - Bad: "The Wave app spans daily check-ins, coaching and 1:1 sessions, so the next-step logic has to stay obvious or users may stall before getting care."
+- Bad because signal-only: "Saw you are hiring SDRs."
+- Bad because unsupported implication: "Saw you are hiring SDRs, so revenue must have doubled."
 - Bad because it is generic: "The product is powerful but could be smoother."
 - Bad because blog-only: "I read your latest blog post and liked the way you explain mental health."
 

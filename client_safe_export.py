@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from config import OUTPUT_DIR
+from delivery_policy import CLIENT_SAFE_DELIVERY_COLUMNS, split_delivery_review_needed
 from privacy_scan import (
     HARD_CLIENT_SAFE_LEAKS,
     SENSITIVE_VALUE_PATTERNS,
@@ -18,28 +19,27 @@ from privacy_scan import (
     sanitize_text,
     screenshot_ocr_required,
 )
-from sendability import apply_sendability_to_dataframe
 
 
-CLIENT_SAFE_COLUMNS = [
-    "status",
-    "sendability_decision",
-    "human_decision",
+CLIENT_SAFE_COLUMNS = CLIENT_SAFE_DELIVERY_COLUMNS + [
+    "delivery_inclusion_reason",
+]
+
+REVIEW_NEEDED_COLUMNS = [
     "company",
     "person",
     "role",
     "website",
     "personalized_line",
-    "evidence_found",
-    "source_urls",
-    "surface_correctness",
-    "evidence_score",
-    "visual_reliability_score",
-    "viewport_scope",
-    "safe_screenshots",
-    "privacy_scan_flags",
-    "screenshot_privacy_notes",
-    "client_safe_notes",
+    "sendability_decision",
+    "human_decision",
+    "delivery_exclusion_reason",
+    "review_priority_score",
+    "review_priority_reason",
+    "review_action_recommendation",
+    "sendability_reasons",
+    "duplicate_company_opener",
+    "mismatch_reason",
 ]
 
 
@@ -59,6 +59,8 @@ def _resolve_file(value: str, base_dir: Path | None = None) -> Path | None:
 
 
 def _scan_safe_dataframe(df: pd.DataFrame) -> list[str]:
+    if df.empty:
+        return []
     blob = "\n".join(df.astype(str).fillna("").agg(" ".join, axis=1).tolist())
     return scan_text(blob)
 
@@ -95,25 +97,12 @@ def _copy_screenshots(row: pd.Series, screenshots_dir: Path, base_dir: Path | No
     return " | ".join(dict.fromkeys(copied)), sorted(set(flags)), list(dict.fromkeys(notes))
 
 
-def _delivery_filter(df: pd.DataFrame) -> pd.Series:
-    human = df.get("human_decision", pd.Series([""] * len(df), index=df.index)).fillna("").astype(str).str.lower()
-    if human.isin({"send", "edit"}).any():
-        return human.isin({"send", "edit"})
-    return df.get("sendability_decision", pd.Series([""] * len(df), index=df.index)).fillna("").astype(str).eq("Send")
-
-
 def client_safe_dataframe(df: pd.DataFrame, base_dir: Path | None = None, screenshots_dir: Path | None = None) -> pd.DataFrame:
-    prepared = apply_sendability_to_dataframe(df)
-    prepared = prepared[_delivery_filter(prepared)].copy()
+    prepared, _, _ = split_delivery_review_needed(df)
+    prepared = prepared.copy()
     if prepared.empty:
-        prepared = apply_sendability_to_dataframe(df).head(0).copy()
-
-    if {"human_decision", "edited_line", "personalized_line"}.issubset(prepared.columns):
-        use_edit = (
-            prepared["human_decision"].fillna("").astype(str).str.lower().isin({"send", "edit"})
-            & prepared["edited_line"].fillna("").astype(str).str.strip().ne("")
-        )
-        prepared.loc[use_edit, "personalized_line"] = prepared.loc[use_edit, "edited_line"]
+        prepared = prepared.head(0).copy()
+    prepared["delivery_inclusion_reason"] = "sendability_send_or_human_approved_final"
 
     if screenshots_dir:
         screenshot_results = prepared.apply(lambda row: _copy_screenshots(row, screenshots_dir, base_dir), axis=1)
@@ -155,6 +144,7 @@ def create_client_safe_package(df: pd.DataFrame, output_dir: Path | None = None,
     screenshots_dir = package_root / "screenshots"
     package_root.mkdir(parents=True, exist_ok=True)
 
+    _, review_needed_df, delivery_audit = split_delivery_review_needed(df)
     safe_df = client_safe_dataframe(df, base_dir=base_dir, screenshots_dir=screenshots_dir)
     remaining_flags = _scan_safe_dataframe(safe_df)
     hard_leaks = [flag for flag in remaining_flags if flag in HARD_CLIENT_SAFE_LEAKS]
@@ -162,7 +152,12 @@ def create_client_safe_package(df: pd.DataFrame, output_dir: Path | None = None,
         raise ValueError(f"Client-safe package blocked because sensitive values remain after sanitizing: {', '.join(hard_leaks)}")
     csv_path = package_root / "client_safe_delivery.csv"
     xlsx_path = package_root / "client_safe_delivery.xlsx"
+    review_needed_path = package_root / "review_needed.csv"
     safe_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    for column in REVIEW_NEEDED_COLUMNS:
+        if column not in review_needed_df:
+            review_needed_df[column] = ""
+    review_needed_df[REVIEW_NEEDED_COLUMNS].to_csv(review_needed_path, index=False, encoding="utf-8-sig")
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
         safe_df.to_excel(writer, index=False, sheet_name="Client Delivery")
         ws = writer.book["Client Delivery"]
@@ -178,8 +173,10 @@ def create_client_safe_package(df: pd.DataFrame, output_dir: Path | None = None,
         "package_name": package_root.name,
         "input_rows": int(len(df)),
         "client_rows": int(len(safe_df)),
-        "filter_policy": "human-approved send/edit when available, otherwise sendability Send only",
-        "included_files": ["client_safe_delivery.csv", "client_safe_delivery.xlsx"],
+        "review_needed_rows": int(len(review_needed_df)),
+        "delivery_audit": delivery_audit.to_dict(),
+        "filter_policy": "strict: sendability Send or human-approved final opener only; Reject/Edit-without-final and policy-blocked rows excluded",
+        "included_files": ["client_safe_delivery.csv", "client_safe_delivery.xlsx", "review_needed.csv"],
         "screenshots_included": int(len(list(screenshots_dir.glob("*"))) if screenshots_dir.exists() else 0),
         "excluded_artifacts": [
             "Playwright traces",
@@ -200,6 +197,7 @@ def create_client_safe_package(df: pd.DataFrame, output_dir: Path | None = None,
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.write(csv_path, csv_path.relative_to(package_root))
         archive.write(xlsx_path, xlsx_path.relative_to(package_root))
+        archive.write(review_needed_path, review_needed_path.relative_to(package_root))
         archive.write(manifest_path, manifest_path.relative_to(package_root))
         if screenshots_dir.exists():
             for file_path in screenshots_dir.rglob("*"):

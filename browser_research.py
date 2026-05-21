@@ -15,6 +15,7 @@ from config import CACHE_DIR, SCREENSHOT_DIR, Settings
 
 
 MAX_RENDERED_TEXT_CHARS = 6500
+_PLAYWRIGHT_RUNTIME_ERROR = ""
 
 
 @dataclass
@@ -65,14 +66,22 @@ class BrowserRenderer:
         self.browser = None
 
     def __enter__(self) -> "BrowserRenderer":
+        global _PLAYWRIGHT_RUNTIME_ERROR
+        if _PLAYWRIGHT_RUNTIME_ERROR:
+            raise RuntimeError(_PLAYWRIGHT_RUNTIME_ERROR)
+        prepare_playwright_runtime()
         from playwright.sync_api import sync_playwright
 
-        self._playwright = sync_playwright().start()
-        launch_options: dict[str, object] = {"headless": True}
-        if self.settings.browser_proxy_url:
-            launch_options["proxy"] = {"server": self.settings.browser_proxy_url}
-        self.browser = self._playwright.chromium.launch(**launch_options)
-        return self
+        try:
+            self._playwright = sync_playwright().start()
+            launch_options: dict[str, object] = {"headless": True}
+            if self.settings.browser_proxy_url:
+                launch_options["proxy"] = {"server": self.settings.browser_proxy_url}
+            self.browser = self._playwright.chromium.launch(**launch_options)
+            return self
+        except NotImplementedError as exc:
+            _PLAYWRIGHT_RUNTIME_ERROR = "Playwright subprocess startup is unavailable in this Windows runtime."
+            raise RuntimeError(_PLAYWRIGHT_RUNTIME_ERROR) from exc
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.browser:
@@ -219,6 +228,20 @@ def browser_rendering_enabled(settings: Settings) -> bool:
 
 def visual_review_enabled(settings: Settings) -> bool:
     return settings.visual_review not in {"0", "false", "no", "off", "disabled"}
+
+
+def prepare_playwright_runtime() -> None:
+    try:
+        import asyncio
+        import sys
+
+        if sys.platform != "win32":
+            return
+        proactor_policy = getattr(asyncio, "WindowsProactorEventLoopPolicy", None)
+        if proactor_policy and not isinstance(asyncio.get_event_loop_policy(), proactor_policy):
+            asyncio.set_event_loop_policy(proactor_policy())
+    except Exception:
+        return
 
 
 def _slug(value: str) -> str:

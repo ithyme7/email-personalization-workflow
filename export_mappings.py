@@ -63,11 +63,22 @@ def _series(df: pd.DataFrame, column: str) -> pd.Series:
 
 def _prepared_delivery_df(df: pd.DataFrame) -> pd.DataFrame:
     prepared = df.copy()
+    if {"selected_opener", "personalized_line"}.issubset(prepared.columns):
+        selected = prepared["selected_opener"].fillna("").astype(str).str.strip()
+        prepared.loc[selected.ne(""), "personalized_line"] = selected[selected.ne("")]
+    if {"human_decision", "edited_final_opener", "personalized_line"}.issubset(prepared.columns):
+        use_final = (
+            prepared["human_decision"].fillna("").astype(str).str.lower().isin({"send", "edit"})
+            & prepared["edited_final_opener"].fillna("").astype(str).str.strip().ne("")
+        )
+        prepared.loc[use_final, "personalized_line"] = prepared.loc[use_final, "edited_final_opener"]
     if {"human_decision", "edited_line", "personalized_line"}.issubset(prepared.columns):
         use_edit = (
             prepared["human_decision"].fillna("").astype(str).str.lower().isin({"send", "edit"})
             & prepared["edited_line"].fillna("").astype(str).str.strip().ne("")
         )
+        if "edited_final_opener" in prepared:
+            use_edit = use_edit & prepared["edited_final_opener"].fillna("").astype(str).str.strip().eq("")
         prepared.loc[use_edit, "personalized_line"] = prepared.loc[use_edit, "edited_line"]
     if "person" in prepared:
         names = prepared["person"].fillna("").astype(str).apply(_split_name)

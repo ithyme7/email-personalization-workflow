@@ -18,6 +18,9 @@ Save rows after a human has made a decision:
 
 For edited rows, fill in:
 
+- `selected_opener`
+- `selected_opener_source`
+- `edited_final_opener`
 - `edited_line`
 - `edit_reason_category`
 - `edit_notes`
@@ -27,7 +30,18 @@ The workflow keeps line provenance non-destructive:
 - `model_opening_line`: the original model line
 - `current_opening_line`: the currently visible/reviewed line
 - `edited_line`: the human rewrite
+- `edited_final_opener`: the final custom rewrite when the reviewer chooses `custom`
+- `selected_opener`: the option or custom line the reviewer selected
+- `selected_opener_source`: `option_1`, `option_2`, `option_3`, or `custom`
 - `final_delivery_line`: the line used for delivery after review
+
+For multi-shot rows, keep all options:
+
+- `opener_option_1..3`
+- per-option angle, evidence, source URL, sendability decision/score, quality flags, and sales-principles summary
+- `non_selected_opener_options`
+
+Non-selected options are valuable preference data. They show which evidence angle, tone, or bridge lost against the selected opener.
 
 This creates a pair:
 
@@ -64,6 +78,7 @@ The next evaluation layer should track:
 - reject rate: how often the system should not have generated a deliverable line
 - surface correctness: whether the line uses the right research surface
 - evidence sufficiency: whether claims are backed by sources/screenshots
+- per-option sales-principles score: whether a candidate was specific, one-insight, low-salesy, evidence-backed, and naturally bridged to the pitch
 - tone match: whether the line sounds like the target client style
 - cost per unique company
 

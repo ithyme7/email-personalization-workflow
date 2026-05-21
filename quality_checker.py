@@ -13,6 +13,8 @@ BLOCKING_QC_FLAGS = {
     "hallucination",
     "download_claim",
     "company_name_not_lowercase",
+    "fake_familiarity_claim",
+    "unsupported_meaningful_claim",
     "missing_evidence_used_for_copy",
     "line_not_grounded_in_evidence",
     "evidence_used_not_in_extracted_facts",

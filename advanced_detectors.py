@@ -16,6 +16,7 @@ from urllib.parse import urljoin
 
 import requests
 
+from browser_research import prepare_playwright_runtime
 from config import DATA_DIR, RESOURCE_DIR, SCREENSHOT_DIR, Settings
 
 
@@ -23,6 +24,7 @@ TRACE_DIR = DATA_DIR / "traces"
 LIGHTHOUSE_DIR = DATA_DIR / "lighthouse"
 AXE_CORE_PATH = RESOURCE_DIR / "vendor" / "axe.min.js"
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled", "none"}
+_PLAYWRIGHT_UNAVAILABLE_NOTE = ""
 
 
 @dataclass
@@ -236,8 +238,14 @@ def check_detector_readiness(settings: Settings) -> list[DetectorReadiness]:
 
 
 def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> AdvancedDetectorResult:
+    global _PLAYWRIGHT_UNAVAILABLE_NOTE
     result = AdvancedDetectorResult()
+    if _PLAYWRIGHT_UNAVAILABLE_NOTE:
+        result.flags.append("playwright_unavailable")
+        result.reviewer_notes.append(_PLAYWRIGHT_UNAVAILABLE_NOTE)
+        return result
     try:
+        prepare_playwright_runtime()
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
@@ -319,8 +327,10 @@ def _run_playwright_checks(url: str, company_name: str, settings: Settings) -> A
                     context.close()
             browser.close()
     except Exception as exc:
+        if isinstance(exc, NotImplementedError):
+            _PLAYWRIGHT_UNAVAILABLE_NOTE = "Playwright unavailable: subprocess startup is not supported by this Windows runtime."
         result.flags.append("playwright_unavailable")
-        result.reviewer_notes.append(f"Playwright unavailable or browser not installed: {exc}")
+        result.reviewer_notes.append(_PLAYWRIGHT_UNAVAILABLE_NOTE or f"Playwright unavailable or browser not installed: {exc}")
     return result
 
 

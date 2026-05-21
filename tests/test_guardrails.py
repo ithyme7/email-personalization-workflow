@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 
@@ -48,6 +49,26 @@ def test_budget_circuit_breaker_blocks_before_api_call() -> None:
     except LLMBudgetExceeded:
         return
     raise AssertionError("Expected LLMBudgetExceeded before network call")
+
+
+def test_gemini_quota_error_is_not_retryable() -> None:
+    class Response:
+        status_code = 429
+
+        def __init__(self) -> None:
+            self.payload = {
+                "error": {
+                    "code": 429,
+                    "message": "You exceeded your current quota. Quota exceeded for free_tier_requests.",
+                    "status": "RESOURCE_EXHAUSTED",
+                }
+            }
+            self.text = json.dumps(self.payload)
+
+        def json(self) -> dict:
+            return self.payload
+
+    assert LLMClient._is_gemini_quota_exhausted(Response())
 
 
 def test_deliverability_flags_html_and_spam() -> None:
@@ -100,7 +121,7 @@ def test_sanitizer_replaces_download_claim_and_lowercases_brand() -> None:
     )
     cleaned = sanitize_personalization_draft(draft, lead)
     assert "downloaded" not in cleaned.opening_line.lower()
-    assert "I opened the rosebud app" in cleaned.opening_line
+    assert "I checked the rosebud app" in cleaned.opening_line
     assert "Rosebud" not in cleaned.tailored_insight
 
 

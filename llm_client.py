@@ -163,8 +163,27 @@ class LLMClient:
             return 20.0
         return 0.0
 
+    @staticmethod
+    def _is_gemini_quota_exhausted(response: requests.Response) -> bool:
+        if response.status_code != 429:
+            return False
+        try:
+            payload = response.json()
+            text = json.dumps(payload, ensure_ascii=False).lower()
+        except ValueError:
+            text = response.text.lower()
+        quota_markers = [
+            "resource_exhausted",
+            "quota",
+            "free_tier",
+            "free tier",
+            "generate_content_free_tier_requests",
+            "exceeded your current quota",
+        ]
+        return any(marker in text for marker in quota_markers)
+
     def _post_gemini_with_retry(self, request_json: dict[str, Any]) -> requests.Response:
-        max_attempts = 5
+        max_attempts = 3
         retryable_statuses = {429, 500, 502, 503, 504}
         for attempt in range(1, max_attempts + 1):
             response = requests.post(
@@ -175,6 +194,9 @@ class LLMClient:
                 timeout=90,
             )
             if response.status_code < 400:
+                return response
+            if self._is_gemini_quota_exhausted(response):
+                logging.error("Gemini quota exhausted; skipping retry backoff for this request.")
                 return response
             if response.status_code not in retryable_statuses or attempt == max_attempts:
                 return response

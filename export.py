@@ -13,7 +13,9 @@ from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from delivery_policy import DELIVERY_COLUMNS, DeliveryAudit, strict_delivery_dataframe
 from models import OUTPUT_COLUMNS
+from mismatch_detection import apply_mismatch_to_row
 from sendability import evaluate_sendability
 from export_mappings import sending_tool_dataframe
 
@@ -46,21 +48,58 @@ CLIENT_REVIEW_COLUMNS = [
     "privacy_flags",
     "client_safe_asset_status",
     "sendability_dimensions",
+    "sales_principles_score",
+    "sales_principles_summary",
+    "sales_principles_reasons",
+    "signal_to_implication_bridge_score",
     "human_decision",
     "edited_line",
+    "selected_opener",
+    "selected_opener_source",
+    "edited_final_opener",
     "edit_reason_category",
     "edit_notes",
     "company",
     "person",
     "personalized_line",
+    "recommended_opener",
+    "recommended_opener_option",
+    "recommended_opener_reason",
+    "opener_option_1",
+    "opener_option_1_angle",
+    "opener_option_1_evidence",
+    "opener_option_1_source_url",
+    "opener_option_1_sendability",
+    "opener_option_1_sendability_score",
+    "opener_option_1_quality_flags",
+    "opener_option_1_sales_principles_summary",
+    "opener_option_1_rejection_or_edit_reason",
     "option_1_line",
     "option_1_qc_score",
     "option_1_quality_flags",
     "option_1_needs_review",
+    "opener_option_2",
+    "opener_option_2_angle",
+    "opener_option_2_evidence",
+    "opener_option_2_source_url",
+    "opener_option_2_sendability",
+    "opener_option_2_sendability_score",
+    "opener_option_2_quality_flags",
+    "opener_option_2_sales_principles_summary",
+    "opener_option_2_rejection_or_edit_reason",
     "option_2_line",
     "option_2_qc_score",
     "option_2_quality_flags",
     "option_2_needs_review",
+    "opener_option_3",
+    "opener_option_3_angle",
+    "opener_option_3_evidence",
+    "opener_option_3_source_url",
+    "opener_option_3_sendability",
+    "opener_option_3_sendability_score",
+    "opener_option_3_quality_flags",
+    "opener_option_3_sales_principles_summary",
+    "opener_option_3_rejection_or_edit_reason",
     "option_3_line",
     "option_3_qc_score",
     "option_3_quality_flags",
@@ -71,6 +110,38 @@ CLIENT_REVIEW_COLUMNS = [
     "conversion_outcome",
     "product_surface_type",
     "research_priority",
+    "lead_quality_score",
+    "lead_quality_flags",
+    "missing_required_fields",
+    "duplicate_company",
+    "duplicate_contact",
+    "app_link_status",
+    "ready_for_personalization",
+    "lead_quality_notes",
+    "email_verification_status",
+    "email_verification_confidence",
+    "email_verification_reason",
+    "company_website_mismatch",
+    "person_company_mismatch",
+    "input_mapping_warning",
+    "mismatch_reason",
+    "research_revenue_model",
+    "research_revenue_model_confidence",
+    "research_revenue_model_evidence",
+    "research_revenue_model_source_url",
+    "research_target_customer",
+    "research_target_customer_confidence",
+    "research_target_customer_evidence",
+    "research_target_customer_source_url",
+    "research_website_tech_stack",
+    "research_website_tech_stack_confidence",
+    "research_website_tech_stack_evidence",
+    "research_latest_funding_details",
+    "research_latest_funding_confidence",
+    "research_latest_funding_source_url",
+    "research_traffic_summary",
+    "research_traffic_confidence",
+    "research_traffic_source",
     "angle_gate_decision",
     "app_check_status",
     "recommended_manual_check",
@@ -125,6 +196,14 @@ CLIENT_RESEARCH_COLUMNS = [
     "app flow observation",
     "product surface type",
     "research priority",
+    "lead quality score",
+    "lead quality flags",
+    "email verification",
+    "revenue model",
+    "target customer",
+    "website tech stack",
+    "latest funding details",
+    "traffic summary",
     "app review complaints",
     "app review themes",
     "app check status",
@@ -177,11 +256,7 @@ def export_rows(rows: list[dict[str, Any]], output_path: str | Path) -> None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    columns = _columns_with_input_extras(OUTPUT_COLUMNS, rows)
-    normalized_rows = []
-    for row in rows:
-        normalized_rows.append({column: row.get(column, "") for column in columns})
-
+    columns, normalized_rows = _materialize_input_columns(rows, OUTPUT_COLUMNS)
     df = pd.DataFrame(normalized_rows, columns=columns)
     if path.suffix.lower() == ".xlsx":
         df.to_excel(path, index=False)
@@ -189,11 +264,63 @@ def export_rows(rows: list[dict[str, Any]], output_path: str | Path) -> None:
         df.to_csv(path, index=False, encoding="utf-8")
 
 
+def export_delivery_rows(
+    rows: list[dict[str, Any]],
+    output_path: str | Path,
+    review_needed_path: str | Path | None = None,
+) -> DeliveryAudit:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    review_rows, _ = _client_rows(rows)
+    delivery, review_needed, audit = strict_delivery_dataframe(pd.DataFrame(review_rows), DELIVERY_COLUMNS)
+    if path.suffix.lower() == ".xlsx":
+        with pd.ExcelWriter(path, engine="openpyxl") as writer:
+            delivery.to_excel(writer, index=False, sheet_name="Delivery")
+            pd.DataFrame([audit.to_dict()]).to_excel(writer, index=False, sheet_name="Audit")
+    else:
+        delivery.to_csv(path, index=False, encoding="utf-8-sig")
+
+    review_path = Path(review_needed_path) if review_needed_path else path.with_name(f"{path.stem}_review_needed{path.suffix}")
+    review_columns = [
+        "company",
+        "person",
+        "role",
+        "website",
+        "personalized_line",
+        "sendability_decision",
+        "human_decision",
+        "delivery_exclusion_reason",
+        "review_priority_score",
+        "review_priority_reason",
+        "review_action_recommendation",
+        "sendability_reasons",
+        "hard_fail_reasons",
+        "soft_edit_reasons",
+        "surface_correctness",
+        "surface_correctness_reasons",
+        "input_mapping_warning",
+        "mismatch_reason",
+        "duplicate_company_opener",
+        "quality_flags",
+        "source_urls",
+    ]
+    for column in review_columns:
+        if column not in review_needed:
+            review_needed[column] = ""
+    if review_path.suffix.lower() == ".xlsx":
+        with pd.ExcelWriter(review_path, engine="openpyxl") as writer:
+            review_needed[review_columns].to_excel(writer, index=False, sheet_name="Review Needed")
+            pd.DataFrame([audit.to_dict()]).to_excel(writer, index=False, sheet_name="Audit")
+    else:
+        review_needed[review_columns].to_csv(review_path, index=False, encoding="utf-8-sig")
+    return audit
+
+
 def export_sending_tool_rows(rows: list[dict[str, Any]], output_path: str | Path, preset: str = "generic") -> None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     review_rows, _ = _client_rows(rows)
-    df = pd.DataFrame(review_rows, columns=_columns_with_input_extras(CLIENT_REVIEW_COLUMNS, review_rows))
+    df, _, _ = strict_delivery_dataframe(pd.DataFrame(review_rows))
     mapped = sending_tool_dataframe(df, preset=preset)
     if path.suffix.lower() == ".xlsx":
         mapped.to_excel(path, index=False)
@@ -257,15 +384,58 @@ def _cell_lines(value: Any, limit: int = 900) -> str:
     return text.replace(" | ", "\n").replace("; ", "\n")
 
 
+INPUT_PREFIX = "input__"
+
+
 def _input_extra_columns(rows: list[dict[str, Any]]) -> list[str]:
     columns: list[str] = []
     for row in rows:
-        columns.extend([key for key in row.keys() if str(key).startswith("input__")])
-    return sorted(dict.fromkeys(columns), key=lambda value: value.lower())
+        for key in row.keys():
+            key_text = str(key)
+            if key_text.startswith(INPUT_PREFIX):
+                original_name = key_text.removeprefix(INPUT_PREFIX)
+                if original_name and original_name not in columns:
+                    columns.append(original_name)
+    return columns
 
 
 def _columns_with_input_extras(base_columns: list[str], rows: list[dict[str, Any]]) -> list[str]:
-    return list(base_columns) + [column for column in _input_extra_columns(rows) if column not in base_columns]
+    input_columns = _input_extra_columns(rows)
+    columns = list(input_columns)
+    for column in base_columns:
+        columns.append(f"workflow__{column}" if column in input_columns else column)
+    return columns
+
+
+def _materialize_input_columns(
+    rows: list[dict[str, Any]],
+    base_columns: list[str],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    input_columns = _input_extra_columns(rows)
+    workflow_columns = list(base_columns)
+    for row in rows:
+        for key in row.keys():
+            key_text = str(key)
+            if key_text.startswith(INPUT_PREFIX):
+                continue
+            if key_text not in workflow_columns:
+                workflow_columns.append(key_text)
+
+    output_columns = list(input_columns)
+    workflow_output_names = {
+        column: f"workflow__{column}" if column in input_columns else column for column in workflow_columns
+    }
+    output_columns.extend(workflow_output_names[column] for column in workflow_columns if workflow_output_names[column] not in output_columns)
+
+    output_rows: list[dict[str, Any]] = []
+    for row in rows:
+        out: dict[str, Any] = {}
+        for original in input_columns:
+            out[original] = row.get(f"{INPUT_PREFIX}{original}", "")
+        for workflow_column in workflow_columns:
+            out[workflow_output_names[workflow_column]] = row.get(workflow_column, "")
+        output_rows.append(out)
+    return output_columns, output_rows
 
 
 def _is_manual_review(value: Any) -> bool:
@@ -289,31 +459,72 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
     review_rows: list[dict[str, Any]] = []
     research_rows: list[dict[str, Any]] = []
     for row in rows:
+        row = apply_mismatch_to_row(row)
         evidence = row.get("evidence_used_for_copy") or row.get("evidence_points", "")
         personalized_line = row.get("opening_line", "")
         notes = _clean_notes(row.get("reviewer_notes", ""))
         if not personalized_line and "ai_generation_unavailable" in str(row.get("quality_flags", "")):
             personalized_line = "[research only, AI writing not available]"
+        selected_line = str(row.get("selected_opener") or row.get("recommended_opener") or personalized_line or "")
+        edited_final = str(row.get("edited_final_opener") or row.get("edited_line") or "")
+        final_line = edited_final if edited_final else selected_line
         status = _status_for(row, personalized_line)
         review_row = {
             "row_id": row.get("row_id", str(len(review_rows) + 1)),
             "run_id": row.get("run_id", ""),
             "example_id": row.get("example_id", ""),
             "model_opening_line": personalized_line,
-            "current_opening_line": personalized_line,
-            "final_delivery_line": personalized_line,
+            "current_opening_line": selected_line,
+            "final_delivery_line": final_line,
             "status": status,
+            "recommended_opener": row.get("recommended_opener", ""),
+            "recommended_opener_option": row.get("recommended_opener_option", ""),
+            "recommended_opener_reason": _cell_lines(row.get("recommended_opener_reason", ""), 420),
+            "selected_opener": row.get("selected_opener", ""),
+            "selected_opener_source": row.get("selected_opener_source", ""),
+            "edited_final_opener": edited_final,
+            "human_decision": row.get("human_decision", "unreviewed"),
+            "edited_line": row.get("edited_line", ""),
+            "edit_reason_category": row.get("edit_reason_category", "not_reviewed"),
+            "edit_notes": row.get("edit_notes", ""),
             "company": row.get("company_name", ""),
             "person": row.get("recipient_name", ""),
             "personalized_line": personalized_line,
+            "opener_option_1": row.get("opener_option_1", "") or row.get("opening_line_option_1", "") or personalized_line,
+            "opener_option_1_angle": row.get("opener_option_1_angle", "") or row.get("chosen_angle_option_1", ""),
+            "opener_option_1_evidence": _cell_lines(row.get("opener_option_1_evidence", "") or row.get("evidence_used_for_copy_option_1", ""), 520),
+            "opener_option_1_source_url": row.get("opener_option_1_source_url", ""),
+            "opener_option_1_sendability": row.get("opener_option_1_sendability", ""),
+            "opener_option_1_sendability_score": row.get("opener_option_1_sendability_score", ""),
+            "opener_option_1_quality_flags": _cell_lines(row.get("opener_option_1_quality_flags", "") or row.get("quality_flags_option_1", ""), 260),
+            "opener_option_1_sales_principles_summary": _cell_lines(row.get("opener_option_1_sales_principles_summary", ""), 420),
+            "opener_option_1_rejection_or_edit_reason": _cell_lines(row.get("opener_option_1_rejection_or_edit_reason", ""), 420),
             "option_1_line": row.get("opening_line_option_1", "") or personalized_line,
             "option_1_qc_score": row.get("confidence_score_option_1", ""),
             "option_1_quality_flags": _cell_lines(row.get("quality_flags_option_1", ""), 220),
             "option_1_needs_review": _yes_no(row.get("needs_manual_review_option_1", "")),
+            "opener_option_2": row.get("opener_option_2", "") or row.get("opening_line_option_2", ""),
+            "opener_option_2_angle": row.get("opener_option_2_angle", "") or row.get("chosen_angle_option_2", ""),
+            "opener_option_2_evidence": _cell_lines(row.get("opener_option_2_evidence", "") or row.get("evidence_used_for_copy_option_2", ""), 520),
+            "opener_option_2_source_url": row.get("opener_option_2_source_url", ""),
+            "opener_option_2_sendability": row.get("opener_option_2_sendability", ""),
+            "opener_option_2_sendability_score": row.get("opener_option_2_sendability_score", ""),
+            "opener_option_2_quality_flags": _cell_lines(row.get("opener_option_2_quality_flags", "") or row.get("quality_flags_option_2", ""), 260),
+            "opener_option_2_sales_principles_summary": _cell_lines(row.get("opener_option_2_sales_principles_summary", ""), 420),
+            "opener_option_2_rejection_or_edit_reason": _cell_lines(row.get("opener_option_2_rejection_or_edit_reason", ""), 420),
             "option_2_line": row.get("opening_line_option_2", ""),
             "option_2_qc_score": row.get("confidence_score_option_2", ""),
             "option_2_quality_flags": _cell_lines(row.get("quality_flags_option_2", ""), 220),
             "option_2_needs_review": _yes_no(row.get("needs_manual_review_option_2", "")),
+            "opener_option_3": row.get("opener_option_3", "") or row.get("opening_line_option_3", ""),
+            "opener_option_3_angle": row.get("opener_option_3_angle", "") or row.get("chosen_angle_option_3", ""),
+            "opener_option_3_evidence": _cell_lines(row.get("opener_option_3_evidence", "") or row.get("evidence_used_for_copy_option_3", ""), 520),
+            "opener_option_3_source_url": row.get("opener_option_3_source_url", ""),
+            "opener_option_3_sendability": row.get("opener_option_3_sendability", ""),
+            "opener_option_3_sendability_score": row.get("opener_option_3_sendability_score", ""),
+            "opener_option_3_quality_flags": _cell_lines(row.get("opener_option_3_quality_flags", "") or row.get("quality_flags_option_3", ""), 260),
+            "opener_option_3_sales_principles_summary": _cell_lines(row.get("opener_option_3_sales_principles_summary", ""), 420),
+            "opener_option_3_rejection_or_edit_reason": _cell_lines(row.get("opener_option_3_rejection_or_edit_reason", ""), 420),
             "option_3_line": row.get("opening_line_option_3", ""),
             "option_3_qc_score": row.get("confidence_score_option_3", ""),
             "option_3_quality_flags": _cell_lines(row.get("quality_flags_option_3", ""), 220),
@@ -324,6 +535,34 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
             "conversion_outcome": row.get("conversion_outcome", ""),
             "product_surface_type": row.get("product_surface_type", ""),
             "research_priority": row.get("research_priority", ""),
+            "lead_quality_score": row.get("lead_quality_score", ""),
+            "lead_quality_flags": _cell_lines(row.get("lead_quality_flags", ""), 260),
+            "missing_required_fields": row.get("missing_required_fields", ""),
+            "duplicate_company": _yes_no(row.get("duplicate_company", "")),
+            "duplicate_contact": _yes_no(row.get("duplicate_contact", "")),
+            "app_link_status": row.get("app_link_status", ""),
+            "ready_for_personalization": _yes_no(row.get("ready_for_personalization", "")),
+            "lead_quality_notes": row.get("lead_quality_notes", ""),
+            "email_verification_status": row.get("email_verification_status", ""),
+            "email_verification_confidence": row.get("email_verification_confidence", ""),
+            "email_verification_reason": row.get("email_verification_reason", ""),
+            "research_revenue_model": row.get("research_revenue_model", ""),
+            "research_revenue_model_confidence": row.get("research_revenue_model_confidence", ""),
+            "research_revenue_model_evidence": row.get("research_revenue_model_evidence", ""),
+            "research_revenue_model_source_url": row.get("research_revenue_model_source_url", ""),
+            "research_target_customer": row.get("research_target_customer", ""),
+            "research_target_customer_confidence": row.get("research_target_customer_confidence", ""),
+            "research_target_customer_evidence": row.get("research_target_customer_evidence", ""),
+            "research_target_customer_source_url": row.get("research_target_customer_source_url", ""),
+            "research_website_tech_stack": row.get("research_website_tech_stack", ""),
+            "research_website_tech_stack_confidence": row.get("research_website_tech_stack_confidence", ""),
+            "research_website_tech_stack_evidence": row.get("research_website_tech_stack_evidence", ""),
+            "research_latest_funding_details": row.get("research_latest_funding_details", ""),
+            "research_latest_funding_confidence": row.get("research_latest_funding_confidence", ""),
+            "research_latest_funding_source_url": row.get("research_latest_funding_source_url", ""),
+            "research_traffic_summary": row.get("research_traffic_summary", ""),
+            "research_traffic_confidence": row.get("research_traffic_confidence", ""),
+            "research_traffic_source": row.get("research_traffic_source", ""),
             "angle_gate_decision": row.get("angle_gate_decision", ""),
             "app_check_status": row.get("app_check_status", ""),
             "recommended_manual_check": _cell_lines(row.get("recommended_manual_check", ""), 520),
@@ -386,6 +625,32 @@ def _client_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list
                 "app flow observation": row.get("app_flow_observation", ""),
                 "product surface type": row.get("product_surface_type", ""),
                 "research priority": row.get("research_priority", ""),
+                "lead quality score": row.get("lead_quality_score", ""),
+                "lead quality flags": _shorten(row.get("lead_quality_flags", ""), 500),
+                "email verification": _shorten(
+                    f"{row.get('email_verification_status', '')} ({row.get('email_verification_confidence', '')}) {row.get('email_verification_reason', '')}",
+                    500,
+                ),
+                "revenue model": _shorten(
+                    f"{row.get('research_revenue_model', '')} [{row.get('research_revenue_model_confidence', '')}] {row.get('research_revenue_model_evidence', '')}",
+                    500,
+                ),
+                "target customer": _shorten(
+                    f"{row.get('research_target_customer', '')} [{row.get('research_target_customer_confidence', '')}] {row.get('research_target_customer_evidence', '')}",
+                    500,
+                ),
+                "website tech stack": _shorten(
+                    f"{row.get('research_website_tech_stack', '')} [{row.get('research_website_tech_stack_confidence', '')}] {row.get('research_website_tech_stack_evidence', '')}",
+                    500,
+                ),
+                "latest funding details": _shorten(
+                    f"{row.get('research_latest_funding_details', '')} [{row.get('research_latest_funding_confidence', '')}] {row.get('research_latest_funding_source_url', '')}",
+                    500,
+                ),
+                "traffic summary": _shorten(
+                    f"{row.get('research_traffic_summary', '')} [{row.get('research_traffic_confidence', '')}] {row.get('research_traffic_source', '')}",
+                    300,
+                ),
                 "app review complaints": _shorten(row.get("app_review_complaints", ""), 900),
                 "app review themes": _shorten(row.get("app_review_themes", ""), 900),
                 "app check status": row.get("app_check_status", ""),
@@ -831,8 +1096,8 @@ def _write_readable_xlsx(rows: list[dict[str, Any]], output_path: Path) -> None:
     _write_dashboard(dashboard, review_rows, research_rows)
 
     ws = wb.create_sheet("Review")
-    review_columns = _columns_with_input_extras(CLIENT_REVIEW_COLUMNS, review_rows)
-    _write_sheet(ws, review_columns, review_rows)
+    review_columns, materialized_review_rows = _materialize_input_columns(review_rows, CLIENT_REVIEW_COLUMNS)
+    _write_sheet(ws, review_columns, materialized_review_rows)
     _style_sheet(
         ws,
         [14, 14, 12, 48, 42, 42, 12, 12, 12, 12, 14, 12, 44, 12, 48, 16, 70, 22, 20, 72, 78, 24, 24, 24, 28, 26, 64, 28, 18, 72, 52, 16, 26, 56, 24, 30, 48],
@@ -842,8 +1107,8 @@ def _write_readable_xlsx(rows: list[dict[str, Any]], output_path: Path) -> None:
     _style_review_status(ws)
 
     details = wb.create_sheet("Research Details")
-    research_columns = _columns_with_input_extras(CLIENT_RESEARCH_COLUMNS, research_rows)
-    _write_sheet(details, research_columns, research_rows)
+    research_columns, materialized_research_rows = _materialize_input_columns(research_rows, CLIENT_RESEARCH_COLUMNS)
+    _write_sheet(details, research_columns, materialized_research_rows)
     _style_sheet(
         details,
         [22, 20, 24, 30, 20, 20, 28, 42, 48, 26, 70, 78, 78, 78, 36, 20, 78, 78, 24, 24, 24, 28, 52, 78, 16, 14, 52, 78, 18, 22, 52, 60],
@@ -923,6 +1188,7 @@ def export_client_batch_rows(rows: list[dict[str, Any]], output_path: str | Path
         _copy_assets_for_delivery(rows, path)
     else:
         compact_rows, _ = _client_rows(rows)
-        df = pd.DataFrame(compact_rows, columns=_columns_with_input_extras(CLIENT_REVIEW_COLUMNS, compact_rows))
+        columns, materialized_rows = _materialize_input_columns(compact_rows, CLIENT_REVIEW_COLUMNS)
+        df = pd.DataFrame(materialized_rows, columns=columns)
         df.to_csv(path, index=False, encoding="utf-8-sig", sep=";")
         _copy_assets_for_delivery(rows, path)

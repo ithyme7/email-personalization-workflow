@@ -82,7 +82,10 @@ Links zie je:
 Rechts zie je:
 
 - de volledige e-mailpreview
-- de huidige personalization line
+- 2 tot 3 opener-opties wanneer beschikbaar
+- per optie de angle, evidence, sendability, flags en korte sales-principles samenvatting
+- de gekozen `selected_opener`
+- een custom rewrite veld
 - jouw beslissing
 - een editveld
 - de reden en notes
@@ -111,6 +114,7 @@ De gate is opgesplitst in meerdere dimensies:
 - `visual_reliability_score`: hoe betrouwbaar de visuele/UX-observatie is.
 - `viewport_scope`: of een visuele claim op mobiel, desktop, beide of onbekend bewijs steunt.
 - `evidence_scope`: of de rij bronlinks, screenshots, beide of dun bewijs heeft.
+- `sales_principles_score`: compact oordeel op specificity, één duidelijke insight, frictie, outcome bridge, commerciële relevantie, salesy taal, fake familiarity en evidence support.
 - `privacy_flags`: interne waarschuwingen zoals traces of lokale paden die niet naar een client moeten.
 
 Hard-fail redenen blokkeren delivery. Soft-edit redenen betekenen meestal dat de rij herschrijfbaar is.
@@ -119,10 +123,15 @@ Hard-fail redenen blokkeren delivery. Soft-edit redenen betekenen meestal dat de
 
 In `Review & Edit` kun je per rij aangeven wat jij als mens beslist:
 
+- `selected_opener`
+- `selected_opener_source`
+- `edited_final_opener`
 - `human_decision`
 - `edited_line`
 - `edit_reason_category`
 - `edit_notes`
+
+Bij multi-shot worden ook de niet-gekozen opties opgeslagen. Dat is nuttig: het systeem leert niet alleen welke opener won, maar ook welke angles of formuleringen je juist niet koos.
 
 Kies daarna waar je de review wilt opslaan:
 
