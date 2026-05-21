@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from threading import local
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -101,6 +102,23 @@ REVIEW_THEME_TERMS = {
     },
 }
 
+# Thread-local session voor connection pooling
+_local = local()
+
+
+def _get_session() -> requests.Session:
+    """Retourneert een per-thread requests.Session met connection pooling."""
+    if not hasattr(_local, "session") or _local.session is None:
+        _local.session = requests.Session()
+    return _local.session
+
+
+def _clear_session() -> None:
+    """Sluit en verwijderd de thread-local session."""
+    if hasattr(_local, "session") and _local.session is not None:
+        _local.session.close()
+        _local.session = None
+
 
 def _app_store_rank(url: str) -> tuple[int, str]:
     normalized = str(url or "").lower()
@@ -141,8 +159,9 @@ def _fetch_public_text(url: str, settings: Settings) -> tuple[str, str] | None:
         except (json.JSONDecodeError, OSError):
             logging.warning("Ignoring unreadable deep research cache for %s", url)
 
+    session = _get_session()
     try:
-        response = requests.get(
+        response = session.get(
             url,
             headers=_headers(settings),
             timeout=settings.request_timeout_seconds,
@@ -163,8 +182,9 @@ def _discover_app_store_links(lead: LeadInput, settings: Settings) -> list[str]:
     if lead.app_store_url:
         links.append(lead.app_store_url)
 
+    session = _get_session()
     try:
-        response = requests.get(
+        response = session.get(
             lead.website_url,
             headers=_headers(settings),
             timeout=settings.request_timeout_seconds,
@@ -195,8 +215,9 @@ def _fetch_apple_review_complaints(app_store_url: str, settings: Settings) -> li
     configured_country = str(getattr(settings, "app_store_country", "") or "").strip().lower()
     country = configured_country if configured_country and configured_country != "auto" else (country_match.group(1) if country_match else "us")
     rss_url = f"https://itunes.apple.com/{country}/rss/customerreviews/id={app_id}/sortBy=mostRecent/json"
+    session = _get_session()
     try:
-        response = requests.get(
+        response = session.get(
             rss_url,
             headers=_headers(settings),
             timeout=settings.request_timeout_seconds,
@@ -327,4 +348,5 @@ def collect_deep_research(lead: LeadInput, settings: Settings) -> DeepResearchRe
             ).strip()
     result.friction_checklist = _build_friction_checklist(lead, result.app_store_summary)
 
+    _clear_session()
     return result

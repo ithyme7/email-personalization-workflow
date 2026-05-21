@@ -52,6 +52,8 @@ class LLMClient:
         self.call_count = 0
         self.estimated_input_tokens = 0
         self.estimated_output_tokens = 0
+        # Connection pooling: herbruikbare TCP-verbindingen via Session
+        self._session = requests.Session()
 
     @property
     def available(self) -> bool:
@@ -98,6 +100,10 @@ class LLMClient:
         if self.settings.llm_provider == "deepseek":
             return self.settings.deepseek_api_key
         return self.settings.openai_api_key
+
+    def close(self) -> None:
+        """Sluit de onderliggende HTTP-sessie om verbindingen netjes vrij te geven."""
+        self._session.close()
 
     @staticmethod
     def _estimate_tokens(value: Any) -> int:
@@ -167,7 +173,7 @@ class LLMClient:
         max_attempts = 5
         retryable_statuses = {429, 500, 502, 503, 504}
         for attempt in range(1, max_attempts + 1):
-            response = requests.post(
+            response = self._session.post(
                 self._endpoint(),
                 params={"key": self._api_key()},
                 headers={"Content-Type": "application/json"},
@@ -255,7 +261,7 @@ class LLMClient:
             headers["HTTP-Referer"] = "https://local.email-personalizer"
             headers["X-OpenRouter-Title"] = "Email Personalization Workflow"
 
-        response = requests.post(
+        response = self._session.post(
             self._endpoint(),
             headers=headers,
             json=request_json,

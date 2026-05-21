@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
+from threading import local
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -33,6 +34,23 @@ PRIORITY_PATH_TERMS = [
 
 MIN_USEFUL_TEXT_CHARS = 500
 MAX_PAGE_TEXT_CHARS = 5500
+
+# Thread-local session voor connection pooling
+_local = local()
+
+
+def _get_session() -> requests.Session:
+    """Retourneert een per-thread requests.Session met connection pooling."""
+    if not hasattr(_local, "session") or _local.session is None:
+        _local.session = requests.Session()
+    return _local.session
+
+
+def _clear_session() -> None:
+    """Sluit en verwijderd de thread-local session."""
+    if hasattr(_local, "session") and _local.session is not None:
+        _local.session.close()
+        _local.session = None
 
 
 def _headers(settings: Settings) -> dict[str, str]:
@@ -72,9 +90,10 @@ def _fetch_page(url: str, settings: Settings) -> PageText | None:
             logging.warning("Ignoring unreadable cache file for %s", url)
 
     headers = _headers(settings)
+    session = _get_session()
     for attempt in range(2):
         try:
-            response = requests.get(url, headers=headers, timeout=settings.request_timeout_seconds)
+            response = session.get(url, headers=headers, timeout=settings.request_timeout_seconds)
             if response.status_code >= 400:
                 logging.warning("Fetch failed for %s with HTTP %s", url, response.status_code)
                 return None
@@ -133,10 +152,12 @@ def _discover_priority_links(homepage_url: str, settings: Settings, rendered_lin
     if rendered_links:
         return _prioritize_links(homepage_url, rendered_links)[: settings.max_pages_per_company - 1]
 
+    headers = _headers(settings)
+    session = _get_session()
     try:
-        response = requests.get(
+        response = session.get(
             homepage_url,
-            headers=_headers(settings),
+            headers=headers,
             timeout=settings.request_timeout_seconds,
         )
         soup = BeautifulSoup(response.text, "html.parser")
@@ -265,13 +286,15 @@ def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
             result.reviewer_notes.extend(advanced.reviewer_notes)
             if advanced.flags:
                 result.reviewer_notes.append(
-                    "Advanced detector found internal UX validation signals: " + ", ".join(advanced.flags[:8])
+                    "Advanced detector found internal UX validation signals: "
+                    + ", ".join(advanced.flags[:8])
                 )
             elif advanced.screenshot_paths:
                 result.reviewer_notes.append("Advanced detector completed with no high-confidence UX flags.")
     finally:
         if renderer:
             renderer.__exit__(None, None, None)
+        _clear_session()
 
     result.source_urls = [page.url for page in result.pages]
     combined = " ".join(page.text for page in result.pages)
