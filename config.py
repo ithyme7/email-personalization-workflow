@@ -61,6 +61,7 @@ class Settings:
     tone_profile: str
     max_batch_cost_usd: float
     max_llm_calls_per_batch: int
+    max_workers: int
     personalization_options: int = 3
     research_region: str = "us"
     app_store_country: str = "us"
@@ -146,6 +147,7 @@ def load_settings() -> Settings:
         tone_profile=os.getenv("TONE_PROFILE", "friction_first").strip() or "friction_first",
         max_batch_cost_usd=max(0.0, _float_env("MAX_BATCH_COST_USD", 0.0)),
         max_llm_calls_per_batch=max(0, _int_env("MAX_LLM_CALLS_PER_BATCH", 0)),
+        max_workers=max(1, _int_env("MAX_WORKERS", 4)),
         personalization_options=max(1, min(3, _int_env("PERSONALIZATION_OPTIONS", 3))),
         research_region=region,
         app_store_country=app_store_country,
