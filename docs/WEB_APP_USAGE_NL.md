@@ -26,23 +26,107 @@ De launcher kiest automatisch `localhost:8501`, of de volgende vrije poort als 8
 2. Vul de campaign context in.
 3. Kies een model provider, model en eventueel API key in de sidebar.
 4. Klik eventueel op `Run system check` voordat je een grote batch start.
-5. Kies een tone profile uit de 50 presets.
+5. Kies een tone profile uit de 50+ presets.
 6. Maak optioneel een klant-specifiek tone profile.
-7. Klik op `Run batch`.
-8. Volg de voortgang via de laadbalk. De run draait op de achtergrond, zodat de app status kan blijven tonen in plaats van te bevriezen.
-9. Bekijk het dashboard voor sendability, review workload, visual confidence, friction types, quality flags en kosteninschatting.
-10. Review en edit de rows in de `Review & Edit` tab.
-11. Zet per rij eventueel `human_decision`, `edited_line`, `edit_reason_category` en `edit_notes`.
-12. Sla goede/mislukte menselijke edits optioneel op als goldset.
-13. Gebruik eventueel `Client Training` om een simpele feedback-template voor de klant te maken.
-14. Check optioneel de `Evals` tab als je een frozen eval set hebt.
-15. Exporteer als CSV, XLSX, full workbook, client delivery export, sending-tool import, client-safe package of naar Google Sheets.
+7. Stel optioneel A/B testen, send-time optimalisatie of follow-up sequences in (zie hieronder).
+8. Klik op `Run batch`.
+9. Volg de voortgang via de laadbalk. De run draait op de achtergrond, zodat de app status kan blijven tonen in plaats van te bevriezen.
+10. Bekijk het dashboard voor sendability, review workload, visual confidence, friction types, quality flags en kosteninschatting.
+11. Review en edit de rows in de `Review & Edit` tab.
+12. Zet per rij eventueel `human_decision`, `edited_line`, `edit_reason_category` en `edit_notes`.
+13. Sla goede/mislukte menselijke edits optioneel op als goldset.
+14. Gebruik eventueel `Client Training` om een simpele feedback-template voor de klant te maken.
+15. Check optioneel de `Evals` tab als je een frozen eval set hebt.
+16. Gebruik de nieuwe tabs `Send-Time`, `A/B Tests` en `Sequences` voor experimentresultaten.
+17. Exporteer als CSV, XLSX, full workbook, client delivery export, sending-tool import, client-safe package of naar Google Sheets.
+
+## Nieuwe Features
+
+### ⏰ Send-Time Optimalisatie
+
+Berekent per lead de optimale verzendtijd op basis van:
+- **Tijdzone-detectie** via domeinnaam of `campaign_region`
+- **Historische open-rate data** (bij ≥50 feedback records)
+- **Weekdag-gewichten** (di/wo/do piek, za/zu dal)
+- **12 regio-specifieke tijdzone-profielen**
+
+Zet aan via `SEND_TIME_OPTIMIZATION_ENABLED=true` in `.env`.
+
+### 📬 Follow-Up Sequences
+
+Genereert automatisch multi-touch vervolg-emails voor leads die niet converteren op de eerste poging. Vier stappen per sequence:
+
+| Stap | Type | Doel |
+|------|------|------|
+| 1 | **Value** | Nieuwe insight / case study |
+| 2 | **Social Proof** | Resultaten in dezelfde sector |
+| 3 | **Direct Ask** | Laagdrempelige CTA (call, demo) |
+| 4 | **Breakup** | Respectvolle afsluiting |
+
+Zet aan via `FOLLOW_UP_SEQUENCE_ENABLED=true` in `.env`.
+
+### 🧪 A/B Testing
+
+Voer automatisch experimenten uit met meerdere varianten:
+- **Thompson Sampling** bandit voor adaptieve traffic-verdeling
+- **Chi-kwadraad test** voor statistische significantie
+- **Wilson score** betrouwbaarheidsintervallen
+- Bepaal de winnaar automatisch op basis van conversiedata
+
+Zet aan via `AB_TESTING_ENABLED=true` in `.env`.
+
+## Environment Settings
+
+Alle optionele settings in `.env`:
+
+```env
+# Personalisatie
+PERSONALIZATION_OPTIONS=3
+
+# Regio & taal
+RESEARCH_REGION=us
+APP_STORE_COUNTRY=us
+BROWSER_LOCALE=en-US
+BROWSER_TIMEZONE=America/New_York
+
+# Browser robuustheid
+BROWSER_RETRY_ATTEMPTS=3
+BROWSER_PROXY_URL=
+BROWSER_USER_AGENT=
+
+# Kostenbewaking
+MAX_BATCH_COST_USD=0
+MAX_LLM_CALLS_PER_BATCH=0
+
+# Iteratieve verfijning
+MAX_REFINEMENT_ITERATIONS=3
+
+# Send-time optimalisatie ⏰
+SEND_TIME_OPTIMIZATION_ENABLED=false
+SEND_TIME_OPTIMIZATION_HOURS_AHEAD=24
+
+# Follow-up sequences 📬
+FOLLOW_UP_SEQUENCE_ENABLED=false
+FOLLOW_UP_MAX_STEPS=4
+FOLLOW_UP_MIN_QUALITY_SCORE=6.0
+
+# A/B Testing 🧪
+AB_TESTING_ENABLED=false
+AB_EXPERIMENT_ID=default
+AB_INITIAL_TRAFFIC_FRACTION=0.5
+AB_SIGNIFICANCE_LEVEL=0.05
+AB_MIN_SAMPLE_SIZE=100
+AB_MAX_TOTAL_LEADS=10000
+AB_EXPLORATION_RATE=0.1
+```
+
+`0` bij kostenbewaking betekent uitgeschakeld.
 
 ## Demo mode
 
 Gebruik `Demo sample` in de input-keuze om de workflow tijdens een call te laten zien zonder eerst een nieuw bestand klaar te zetten.
 
-## Batch history
+## Batch History
 
 Elke run wordt lokaal opgeslagen in de history met datum, aantal rows, ready/review verdeling, model, tone profile, kosteninschatting en outputbestand. Vanuit de `History` tab kun je een eerdere workbook opnieuw laden of downloaden.
 
@@ -55,7 +139,6 @@ De run en rows bewaren ook prompt-hashes zoals `prompt_set_hash`, `write_prompt_
 Gebruik `Run system check` in de sidebar vóór grote batches.
 
 De check controleert:
-
 - outputmap schrijfbaar
 - SQLite history schrijfbaar
 - proxy werkt als er een proxy is ingesteld
@@ -64,7 +147,7 @@ De check controleert:
 
 Een ontbrekende API key is een waarschuwing, geen harde fout. De tool kan dan nog steeds research-only output maken.
 
-## Tone calibration
+## Tone Calibration
 
 In `Tone Calibration` kun je feedback van een klant plakken, goede en slechte voorbeelden toevoegen en daar een nieuw client-specific profile van maken. Dit profile verschijnt daarna in de tone dropdown.
 
@@ -73,14 +156,12 @@ In `Tone Calibration` kun je feedback van een klant plakken, goede en slechte vo
 In `Review & Edit` staat boven de tabel een snelle review-panel.
 
 Links zie je:
-
 - het gevonden bewijs
 - bronlinks
 - hard-fail en soft-edit redenen
 - flags en review-notes
 
 Rechts zie je:
-
 - de volledige e-mailpreview
 - de huidige personalization line
 - jouw beslissing
@@ -89,7 +170,7 @@ Rechts zie je:
 
 Gebruik dit panel voor de eerste kwaliteitsronde. De grote tabel blijft beschikbaar voor bulk edits en controle.
 
-## Sendability gate
+## Sendability Gate
 
 De app maakt nu onderscheid tussen gewone status en sendability:
 
@@ -100,7 +181,6 @@ De app maakt nu onderscheid tussen gewone status en sendability:
 De gate let onder andere op unsupported claims, em dashes, genericness, technische audit-taal, verkeerde surface, te lange zinnen, ontbrekende outcome-link en lage visual confidence.
 
 De gate is opgesplitst in meerdere dimensies:
-
 - `hard_fail_reasons`: redenen waardoor je de line niet moet versturen.
 - `soft_edit_reasons`: redenen waardoor de line nog bewerkt moet worden.
 - `evidence_score`: hoe sterk de bron/evidence is.
@@ -115,7 +195,7 @@ De gate is opgesplitst in meerdere dimensies:
 
 Hard-fail redenen blokkeren delivery. Soft-edit redenen betekenen meestal dat de rij herschrijfbaar is.
 
-## Human edit goldset
+## Human Edit Goldset
 
 In `Review & Edit` kun je per rij aangeven wat jij als mens beslist:
 
@@ -178,6 +258,15 @@ data/campaign_feedback/campaign_results.csv
 
 Dit traint nog geen model automatisch. Het zorgt er wel voor dat je later kunt meten welke soort lines, surfaces en evidence echt betere replies of bookings opleveren.
 
+## Feedbacksysteem & Leerloop
+
+De tool verzamelt feedback per run: open rates, reply rates, conversies, en reply-tijden. Dit stroomt terug naar:
+
+- **Send-time optimizer** — verbetert verzendtijd-aanbevelingen op basis van historische open-data
+- **Research depth scoring** — leert welke signalen het meest voorspellend zijn voor conversie
+- **A/B test evaluatie** — meet welke varianten significant beter presteren
+- **Goldset evaluatie** — meet of de sendability-gate verbeterd door feedback terug te voeden
+
 ## Evals
 
 In de `Evals` tab meet de app de huidige sendability-gate tegen je `frozen_eval_set`.
@@ -192,7 +281,7 @@ De belangrijkste metrics:
 
 Gebruik dit vooral voordat je prompts, thresholds of modelkeuze verandert.
 
-## Client-safe package
+## Client-safe Package
 
 Gebruik in de `Export` tab bij voorkeur `Create client-safe delivery package` voor externe levering.
 

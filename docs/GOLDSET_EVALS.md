@@ -54,18 +54,40 @@ Include:
 - weak-evidence examples
 - tone failures
 - technical-audit-language failures
+- **low send-time confidence** (to test optimizer fallback behavior)
+- **multi-angle rows** (to test sequence deduplication logic)
 
-## What To Measure Later
+## What To Measure
 
-The next evaluation layer should track:
+### Core Metrics
 
-- sendability precision: how many `Send` rows survive human review
-- edit rate: how often generated lines need rewriting
-- reject rate: how often the system should not have generated a deliverable line
-- surface correctness: whether the line uses the right research surface
-- evidence sufficiency: whether claims are backed by sources/screenshots
-- tone match: whether the line sounds like the target client style
-- cost per unique company
+- **sendability precision**: how many `Send` rows survive human review
+- **edit rate**: how often generated lines need rewriting
+- **reject rate**: how often the system should not have generated a deliverable line
+- **surface correctness**: whether the line uses the right research surface
+- **evidence sufficiency**: whether claims are backed by sources/screenshots
+- **tone match**: whether the line sounds like the target client style
+- **cost per unique company**
+
+### Send-Time Metrics (when enabled)
+
+- **send-time accuracy**: correlation between suggested time and actual open time
+- **open-rate lift**: compare open rates at suggested vs. non-suggested times
+- **confidence calibration**: does the confidence score predict actual performance?
+
+### Sequence Metrics (when enabled)
+
+- **step-by-step reply rates**: which sequence step generates the most replies
+- **sequence completion rate**: how many leads make it through all 4 steps
+- **angle deduplication accuracy**: how often sequences successfully avoid the original angle
+- **quality score distribution**: are most steps above the review threshold?
+
+### A/B Test Metrics (when enabled)
+
+- **statistical significance rate**: how often experiments reach significance
+- **false positive rate**: how often a "winner" is declared when there is no real difference
+- **time to significance**: average number of leads needed per experiment
+- **Thompson Sampling efficiency**: how quickly traffic shifts to the winning variant
 
 ## Running The Frozen Eval Report
 
@@ -84,7 +106,7 @@ This creates an Excel report under `data/output/evals/` with:
 - surface-correctness rate
 - row-level detail for misses
 
-Use this before changing prompts, thresholds, model choice, or client tone profiles.
+Use this before changing prompts, thresholds, model choice, or tone profiles.
 
 ## Release Gate
 
@@ -123,7 +145,7 @@ GitHub Actions verifies the manifest checksum and runs `eval_runner.py --enforce
 
 ## Pairwise Judge Direction
 
-Do not ask a judge model vague questions like “is this good?”
+Do not ask a judge model vague questions like "is this good?"
 
 Use pairwise or pass/fail prompts:
 
