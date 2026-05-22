@@ -6,7 +6,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from config import CACHE_DIR
+from cache import read_cached_json, write_cached_json
+from config import CACHE_DIR, Settings
 from llm_client import LLMClient, LLMError, load_prompt
 from models import EvidenceFact, EvidenceResult, LeadInput, ResearchResult, ToneProfile
 
@@ -83,14 +84,14 @@ def extract_evidence(
     research: ResearchResult,
     tone_profile: ToneProfile | None = None,
 ) -> EvidenceResult:
-    """Haal evidence op via LLM — met lokale cache om dubbele calls te voorkomen."""
+    """Haal evidence op via LLM — met TTL-cache om dubbele calls te voorkomen."""
     tone_name = tone_profile.name if tone_profile else ""
     cache_file = _evidence_cache_path(lead, research.summary, tone_name)
 
-    # Probeer cache te lezen
+    # Probeer cache te lezen (met TTL)
     try:
-        if cache_file.exists():
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+        cached = read_cached_json(cache_file, ttl_seconds=client.settings.cache_ttl_seconds)
+        if cached is not None:
             logging.debug("Evidence cache hit voor %s", lead.company_name)
             return _deserialize_evidence_result(cached)
     except (json.JSONDecodeError, OSError) as exc:
@@ -159,10 +160,9 @@ def extract_evidence(
 
     # Schrijf resultaat naar cache (fire-and-forget)
     try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(
-            json.dumps(_serialize_evidence_result(result), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        write_cached_json(
+            cache_file,
+            _serialize_evidence_result(result),
         )
         logging.debug("Evidence gecached voor %s (%d facts)", lead.company_name, len(facts))
     except OSError:

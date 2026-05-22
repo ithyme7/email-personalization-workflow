@@ -79,6 +79,7 @@ Tailored insight rules:
 - No em dashes.
 
 If previous_failure_reasons are supplied, fix those issues. Accuracy is more important than cleverness.
+If qc_suggested_rewrite is supplied, use the suggested opening_line and tailored_insight as a starting point. Rewrite only the parts flagged as problematic — keep the good parts of the draft. Do not discard the entire draft and start from scratch.
 If variant_index, variant_instruction, or avoid_opening_lines are supplied, write a distinct option for that variant. Do not repeat any avoid_opening_lines. Keep the same evidence discipline and QC rules for every option. When possible, make each option focus on a different evidence-backed angle, such as user feedback, onboarding/conversion friction, or proof/positioning friction.
 
 Return this JSON shape:

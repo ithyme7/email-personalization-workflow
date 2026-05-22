@@ -95,6 +95,11 @@ class Settings:
             return self.has_deepseek_key
         return self.has_openai_key
 
+    @property
+    def cache_ttl_seconds(self) -> int:
+        """TTL voor LLM-response cache in seconden (default: 24 uur)."""
+        return _int_env("CACHE_TTL_SECONDS", 86400)
+
 
 def _int_env(name: str, default: int) -> int:
     try:

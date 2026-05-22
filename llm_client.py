@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -9,7 +10,8 @@ from typing import Any
 
 import requests
 
-from config import PROMPTS_DIR, Settings
+from cache import read_cached_json, write_cached_json
+from config import CACHE_DIR, PROMPTS_DIR, Settings
 from cost_estimator import price_for_model
 from rate_limiter import RateLimiter
 from retry import ExponentialBackoff
@@ -119,6 +121,26 @@ class LLMClient:
     def close(self) -> None:
         """Sluit de onderliggende HTTP-sessie om verbindingen netjes vrij te geven."""
         self._session.close()
+
+    def _cache_key(self, system_prompt: str, user_payload: dict[str, Any], temperature: float) -> str:
+        """Berekent een deterministische cache key op basis van model, prompts en temperature."""
+        payload_str = json.dumps(user_payload, sort_keys=True, ensure_ascii=False)
+        raw = f"{self.settings.llm_provider}:{self.settings.model_name}:{temperature}:{system_prompt}:{payload_str}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _cache_path(self, cache_key: str) -> Path:
+        return CACHE_DIR / f"llm_response_{cache_key}.json"
+
+    def _call_cached(self, cache_key: str, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Probeert een gecachte LLM-response te lezen. Retourneert None als cache miss of verlopen."""
+        try:
+            cached = read_cached_json(self._cache_path(cache_key), ttl_seconds=self.settings.cache_ttl_seconds)
+            if cached is not None:
+                self._record_usage(system_prompt, user_payload, cached.get("content", ""))
+                return cached
+        except Exception:
+            pass
+        return None
 
     def _wait_for_rate_limit(self) -> None:
         """Wacht op een beschikbare rate-limit token voordat een API-call wordt gemaakt.
@@ -268,6 +290,7 @@ class LLMClient:
         system_prompt: str,
         user_payload: dict[str, Any],
         temperature: float = 0.2,
+        skip_cache: bool = False,
     ) -> dict[str, Any]:
         if not self.available:
             if self.settings.llm_provider == "gemini":
@@ -278,46 +301,62 @@ class LLMClient:
                 raise LLMError("DEEPSEEK_API_KEY is missing")
             raise LLMError("OPENAI_API_KEY is missing")
 
+        # --- Cache checks ---
+        cache_key = self._cache_key(system_prompt, user_payload, temperature)
+        if not skip_cache:
+            cached = self._call_cached(cache_key, system_prompt, user_payload)
+            if cached is not None:
+                logging.debug("LLM cache hit (%s)", cache_key[:12])
+                return cached
+
         self._enforce_budget(system_prompt, user_payload)
         self._wait_for_rate_limit()
 
         if self.settings.llm_provider == "gemini":
-            return self._complete_json_gemini(system_prompt, user_payload, temperature)
+            result = self._complete_json_gemini(system_prompt, user_payload, temperature)
+        else:
+            request_json: dict[str, Any] = {
+                "model": self.settings.model_name,
+                "temperature": temperature,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+                ],
+            }
+            if self.settings.llm_provider == "openai":
+                request_json["response_format"] = {"type": "json_object"}
 
-        request_json: dict[str, Any] = {
-            "model": self.settings.model_name,
-            "temperature": temperature,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-            ],
-        }
-        if self.settings.llm_provider == "openai":
-            request_json["response_format"] = {"type": "json_object"}
+            headers = {
+                "Authorization": f"Bearer {self._api_key()}",
+                "Content-Type": "application/json",
+            }
+            if self.settings.llm_provider == "openrouter":
+                headers["HTTP-Referer"] = "https://local.email-personalizer"
+                headers["X-OpenRouter-Title"] = "Email Personalization Workflow"
 
-        headers = {
-            "Authorization": f"Bearer {self._api_key()}",
-            "Content-Type": "application/json",
-        }
-        if self.settings.llm_provider == "openrouter":
-            headers["HTTP-Referer"] = "https://local.email-personalizer"
-            headers["X-OpenRouter-Title"] = "Email Personalization Workflow"
+            response = self._session.post(
+                self._endpoint(),
+                headers=headers,
+                json=request_json,
+                timeout=90,
+            )
+            if response.status_code >= 400:
+                logging.error("%s API error: %s %s", self.provider_name, response.status_code, response.text[:500])
+                message = _extract_error_message(response)
+                raise LLMError(f"{self.provider_name} API error {response.status_code}: {message}")
 
-        response = self._session.post(
-            self._endpoint(),
-            headers=headers,
-            json=request_json,
-            timeout=90,
-        )
-        if response.status_code >= 400:
-            logging.error("%s API error: %s %s", self.provider_name, response.status_code, response.text[:500])
-            message = _extract_error_message(response)
-            raise LLMError(f"{self.provider_name} API error {response.status_code}: {message}")
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            self._record_usage(system_prompt, user_payload, content)
+            result = parse_json_object(content)
 
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        self._record_usage(system_prompt, user_payload, content)
-        return parse_json_object(content)
+        # --- Schrijf naar cache ---
+        try:
+            write_cached_json(self._cache_path(cache_key), {"content": result})
+        except Exception:
+            logging.debug("Kon LLM-response niet cachen")
+
+        return result
 
 
 OpenAIClient = LLMClient
