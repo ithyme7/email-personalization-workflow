@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime
 import hashlib
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 import pandas as pd
@@ -24,6 +25,11 @@ from taxonomy import (
     SEVERE_QUALITY_FLAGS,
     VISUAL_CLAIM_TERMS,
     WEBSITE_SURFACE_TERMS,
+)
+
+PLACEHOLDER_PATTERN = re.compile(
+    r"\{[A-Za-z_][A-Za-z0-9_]*\}|input provided contains placeholders|provide the actual values",
+    re.IGNORECASE,
 )
 
 
@@ -402,6 +408,9 @@ def evaluate_copy_quality(row: Mapping[str, Any]) -> tuple[int, list[str], list[
 
     if not line or line.startswith("["):
         hard.append("no_sendable_personalized_line")
+        penalties.append(60)
+    if PLACEHOLDER_PATTERN.search(line):
+        hard.append("placeholder_token")
         penalties.append(60)
     if "—" in line or "–" in line:
         hard.append("dash_character_in_line")

@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import requests
 
@@ -40,6 +40,29 @@ def load_prompt_pair(name: str) -> tuple[str, str]:
     system = PROMPTS_DIR / f"{name}_system.txt"
     user = PROMPTS_DIR / f"{name}_user.txt"
     return system.read_text(encoding="utf-8"), user.read_text(encoding="utf-8")
+
+
+def render_prompt_template(template: str, values: Mapping[str, Any]) -> str:
+    """Render {name} prompt placeholders without disturbing JSON examples.
+
+    Several prompt files intentionally contain literal JSON braces in examples.
+    Using str.format would require escaping all of those braces and string.Template
+    would leave the project's {name} placeholders untouched. This replaces only
+    known simple placeholders supplied in values.
+    """
+
+    def _stringify(value: Any) -> str:
+        if isinstance(value, (dict, list, tuple)):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in values:
+            return match.group(0)
+        return _stringify(values[key])
+
+    return re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", replace, template)
 
 
 def parse_json_object(text: str) -> dict[str, Any]:

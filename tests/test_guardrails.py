@@ -112,6 +112,17 @@ def test_download_claim_is_flagged() -> None:
     assert "download_claim" in flags
 
 
+def test_placeholder_tokens_are_flagged() -> None:
+    draft = PersonalizationDraft(
+        opening_line="I opened the {company_name} app and noticed {app_flow_observation}, which could hurt activation.",
+        tailored_insight="",
+        chosen_angle="",
+        evidence_used_for_copy=["App listing mentions signup friction."],
+    )
+    flags = local_personalization_flags(draft)
+    assert "placeholder_token" in flags
+
+
 def test_sanitizer_replaces_download_claim_and_lowercases_brand() -> None:
     lead = LeadInput(company_name="Rosebud", website_url="https://rosebud.app")
     draft = PersonalizationDraft(

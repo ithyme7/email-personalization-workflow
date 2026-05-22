@@ -63,6 +63,11 @@ DOWNLOAD_PATTERNS = (
     r"\bafter\s+installing\b",
 )
 
+PLACEHOLDER_PATTERN = re.compile(
+    r"\{[A-Za-z_][A-Za-z0-9_]*\}|input provided contains placeholders|provide the actual values",
+    re.IGNORECASE,
+)
+
 
 def _brand_casing_map(lead: LeadInput | None) -> list[tuple[str, str]]:
     """Return list of (lowercase_brand, replacement) sorted longest first.
@@ -180,6 +185,10 @@ def _has_download_claim(text: str) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in DOWNLOAD_PATTERNS)
 
 
+def _has_placeholder_token(text: str) -> bool:
+    return bool(PLACEHOLDER_PATTERN.search(text or ""))
+
+
 def _has_non_lowercase_brand(text: str, lead: LeadInput | None) -> bool:
     for lower, preferred in _brand_casing_map(lead):
         pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(lower)}(?![A-Za-z0-9])", re.IGNORECASE)
@@ -211,6 +220,8 @@ def local_personalization_flags(
         flags.append("missing_evidence_used_for_copy")
     if _has_download_claim(text):
         flags.append("download_claim")
+    if _has_placeholder_token(text):
+        flags.append("placeholder_token")
     if _has_non_lowercase_brand(draft.opening_line, lead):
         flags.append("company_name_not_lowercase")
     if draft.opening_line and not (

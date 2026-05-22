@@ -6,11 +6,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from llm_client import LLMClient
+from llm_client import LLMClient, render_prompt_template
 from models import LeadInput, PersonalizationDraft, ToneProfile
 from copy_guardrails import sanitize_personalization_draft
-
-from string import Template
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +54,9 @@ def _load_followup_system_prompt() -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _load_followup_user_template() -> Template:
+def _load_followup_user_template() -> str:
     path = Path(__file__).resolve().parent / "prompts" / "followup_sequence_user.txt"
-    return Template(path.read_text(encoding="utf-8"))
+    return path.read_text(encoding="utf-8")
 
 
 def _pick_remaining_evidence(
@@ -84,22 +82,53 @@ def _build_user_payload(
     used_evidence = original_draft.evidence_used_for_copy or []
     remaining = _pick_remaining_evidence(all_evidence_texts, used_evidence)
 
-    return _load_followup_user_template().safe_substitute(
-        original_angle=original_draft.chosen_angle or "",
-        original_opening_line=original_draft.opening_line or "",
-        step_number=step_number,
-        total_steps=total_steps,
-        step_strategy=STEP_STRATEGIES.get(step_number, STEP_STRATEGIES[MAX_SEQUENCE_STEPS]),
-        reply_status="has not replied" if step_number < 4 else "no reply after previous follow-ups",
-        reply_context="No reply received to the previous email",
-        failed_angles=" | ".join(original_draft.evidence_used_for_copy[:3]),
-        used_evidence=" | ".join(used_evidence[:5]),
-        remaining_evidence_text=" | ".join(remaining) if remaining else "No additional evidence available",
-        tone_profile_json=json.dumps(
-            tone_profile.to_prompt_payload() if tone_profile else {}
+    return render_prompt_template(
+        _load_followup_user_template(),
+        _followup_template_values(
+            original_draft=original_draft,
+            step_number=step_number,
+            total_steps=total_steps,
+            step_strategy=STEP_STRATEGIES.get(step_number, STEP_STRATEGIES[MAX_SEQUENCE_STEPS]),
+            reply_status="has not replied" if step_number < 4 else "no reply after previous follow-ups",
+            reply_context="No reply received to the previous email",
+            failed_angles=" | ".join(original_draft.evidence_used_for_copy[:3]),
+            used_evidence=" | ".join(used_evidence[:5]),
+            remaining_evidence_text=" | ".join(remaining) if remaining else "No additional evidence available",
+            tone_profile=tone_profile,
+            feedback_context=feedback_context,
         ),
-        feedback_context=feedback_context,
     )
+
+
+def _followup_template_values(
+    original_draft: PersonalizationDraft,
+    step_number: int,
+    total_steps: int,
+    step_strategy: str,
+    reply_status: str,
+    reply_context: str,
+    failed_angles: str,
+    used_evidence: str,
+    remaining_evidence_text: str,
+    tone_profile: ToneProfile | None,
+    feedback_context: str,
+) -> dict[str, Any]:
+    return {
+        "original_angle": original_draft.chosen_angle or "",
+        "original_opening_line": original_draft.opening_line or "",
+        "step_number": step_number,
+        "total_steps": total_steps,
+        "step_strategy": step_strategy,
+        "reply_status": reply_status,
+        "reply_context": reply_context,
+        "previous_rejection_reasons": "",
+        "failed_angles": failed_angles,
+        "used_evidence": used_evidence,
+        "remaining_evidence": remaining_evidence_text,
+        "remaining_evidence_text": remaining_evidence_text,
+        "tone_profile_json": json.dumps(tone_profile.to_prompt_payload() if tone_profile else {}),
+        "feedback_context": feedback_context,
+    }
 
 
 def generate_sequence(
@@ -175,7 +204,23 @@ def _generate_single_step(
     feedback_context: str = "",
 ) -> SequenceStep:
     """Generate a single follow-up email step."""
-    system_prompt = _load_followup_system_prompt()
+    total_steps = min(MAX_SEQUENCE_STEPS, 4)
+    used_evidence = original_draft.evidence_used_for_copy or []
+    remaining = _pick_remaining_evidence(all_evidence_texts, used_evidence)
+    values = _followup_template_values(
+        original_draft=original_draft,
+        step_number=step_number,
+        total_steps=total_steps,
+        step_strategy=STEP_STRATEGIES.get(step_number, STEP_STRATEGIES[MAX_SEQUENCE_STEPS]),
+        reply_status="has not replied" if step_number < 4 else "no reply after previous follow-ups",
+        reply_context="No reply received to the previous email",
+        failed_angles=" | ".join(sorted(blocklist_angles)),
+        used_evidence=" | ".join(used_evidence[:5]),
+        remaining_evidence_text=" | ".join(remaining) if remaining else "No additional evidence available",
+        tone_profile=tone_profile,
+        feedback_context=feedback_context,
+    )
+    system_prompt = render_prompt_template(_load_followup_system_prompt(), values)
     user_payload = _build_user_payload(
         lead=lead,
         original_draft=original_draft,

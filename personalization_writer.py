@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from llm_client import LLMClient, LLMError, load_prompt, load_prompt_pair
+from llm_client import LLMClient, LLMError, load_prompt_pair, render_prompt_template
 from models import EvidenceResult, LeadInput, PersonalizationDraft, ToneProfile
 from evidence_extractor import evidence_to_payload
 from copy_guardrails import sanitize_personalization_draft
 from defaults import _default_next_sentence
 
-from string import Template
 import json
 
 
@@ -40,35 +39,39 @@ def _render_user_payload(
     else:
         prev = {}
 
-    tpl = Template(_USER_TEMPLATE_STR)
-    return tpl.safe_substitute(
-        company_name=lead.company_name or "",
-        website_url=lead.website_url or "",
-        recipient_name=lead.recipient_name or "",
-        recipient_role=lead.recipient_role or "",
-        campaign_context=lead.campaign_context or "",
-        optional_notes=lead.optional_notes or "",
-        linkedin_observation=lead.linkedin_observation or "",
-        linkedin_source_note=lead.linkedin_source_note or "",
-        app_store_url=lead.app_store_url or "",
-        app_flow_observation=lead.app_flow_observation or "",
-        app_flow_source_note=lead.app_flow_source_note or "",
-        screenshot_url=lead.screenshot_url or "",
-        recent_news_url=lead.recent_news_url or "",
-        recent_news_note=lead.recent_news_note or "",
-        competitor_context=lead.competitor_context or "",
-        required_next_sentence=required_next_sentence,
-        evidence_json=evidence_payload,
-        previous_draft_json=json.dumps(prev),
-        variant_index=variant_index,
-        avoid_opening_lines=avoid_opening_lines or [],
-        variant_instruction=variant_instruction or "",
-        tone_profile_json=json.dumps(
-            tone_profile.to_prompt_payload() if tone_profile else {}
-        ),
-        feedback_context=feedback_context,
-        research_depth=research_depth,
-        ab_variant_label=ab_variant_label,
+    return render_prompt_template(
+        _USER_TEMPLATE_STR,
+        {
+            "company_name": lead.company_name or "",
+            "website_url": lead.website_url or "",
+            "recipient_name": lead.recipient_name or "",
+            "recipient_role": lead.recipient_role or "",
+            "campaign_context": lead.campaign_context or "",
+            "optional_notes": lead.optional_notes or "",
+            "linkedin_observation": lead.linkedin_observation or "",
+            "linkedin_source_note": lead.linkedin_source_note or "",
+            "app_store_url": lead.app_store_url or "",
+            "app_flow_observation": lead.app_flow_observation or "",
+            "app_flow_source_note": lead.app_flow_source_note or "",
+            "screenshot_url": lead.screenshot_url or "",
+            "recent_news_url": lead.recent_news_url or "",
+            "recent_news_note": lead.recent_news_note or "",
+            "competitor_context": lead.competitor_context or "",
+            "opening_line": "[personalized opening line]",
+            "required_next_sentence": required_next_sentence,
+            "evidence_json": evidence_payload,
+            "previous_draft_json": json.dumps(prev),
+            "previous_failure_reasons": previous_failure_reasons or [],
+            "variant_index": variant_index,
+            "avoid_opening_lines": avoid_opening_lines or [],
+            "variant_instruction": variant_instruction or "",
+            "tone_profile_json": json.dumps(
+                tone_profile.to_prompt_payload() if tone_profile else {}
+            ),
+            "feedback_context": feedback_context,
+            "research_depth": research_depth,
+            "ab_variant_label": ab_variant_label,
+        },
     )
 
 
@@ -100,9 +103,17 @@ def write_personalization(
         qc_suggested_rewrite=qc_suggested_rewrite,
         feedback_context=feedback_context,
         research_depth=research_depth,
+        ab_variant_label=ab_variant_label,
     )
     try:
-        raw = client.complete_json(SYSTEM_TEMPLATE, user_text, temperature=temperature)
+        system_text = render_prompt_template(
+            SYSTEM_TEMPLATE,
+            {
+                "opening_line": "[personalized opening line]",
+                "required_next_sentence": required_next_sentence,
+            },
+        )
+        raw = client.complete_json(system_text, user_text, temperature=temperature)
     except LLMError as exc:
         return PersonalizationDraft(
             opening_line="",

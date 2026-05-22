@@ -30,6 +30,21 @@ def test_app_first_weak_website_surface_gets_review_flag() -> None:
     assert "app_review_evidence_preferred" in result["surface_correctness_reasons"]
 
 
+def test_placeholder_copy_is_never_sendable() -> None:
+    result = evaluate_sendability(
+        {
+            "company": "Trayt Health",
+            "website": "https://trayt.health",
+            "product_surface_type": "app_first_product",
+            "personalized_line": "I opened the {company_name} app and noticed {app_flow_observation}, which could hurt activation.",
+            "evidence_found": "The app listing mentions access friction.",
+            "source_urls": "https://apps.apple.com/example",
+        }
+    )
+    assert result["sendability_decision"] == "Reject"
+    assert "placeholder_token" in result["hard_fail_reasons"]
+
+
 def test_low_confidence_evidence_softens_assertive_language() -> None:
     draft = PersonalizationDraft(
         opening_line="I bet that's costing signups before users reach activation.",
