@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from defaults import _default_next_sentence
 from llm_client import LLMClient, LLMError, load_prompt
 from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ToneProfile
 from evidence_extractor import evidence_to_payload
@@ -36,7 +37,7 @@ def check_quality(
     tone_profile: ToneProfile | None = None,
 ) -> QCResult:
     prompt = load_prompt("qc_personalization.txt")
-    next_sentence = lead.campaign_context.strip() or "We help mobile app teams with this type of work, figure out where users drop off and why."
+    next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
     payload = {
         "company_name": lead.company_name,
         "website_url": lead.website_url,

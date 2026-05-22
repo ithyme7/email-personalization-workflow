@@ -6,6 +6,9 @@ from evidence_extractor import evidence_to_payload
 from copy_guardrails import sanitize_personalization_draft
 
 
+from defaults import _default_next_sentence
+
+
 def write_personalization(
     client: LLMClient,
     lead: LeadInput,
@@ -18,7 +21,7 @@ def write_personalization(
     qc_suggested_rewrite: dict[str, str] | None = None,
 ) -> PersonalizationDraft:
     prompt = load_prompt("write_personalization.txt")
-    next_sentence = lead.campaign_context.strip() or "We help mobile app teams with this type of work, figure out where users drop off and why."
+    next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
     full_template = (
         "Hey [Name]\n"
         "{personalized_line}\n"

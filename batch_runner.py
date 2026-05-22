@@ -14,6 +14,7 @@ from deep_research import collect_deep_research
 from evidence_extractor import evidence_to_payload, extract_evidence
 from export import export_client_batch_rows, export_rows, export_sending_tool_rows
 from checkpoint import load_checkpoint, save_checkpoint, cleanup_checkpoint
+from defaults import _default_next_sentence
 from input_loader import load_leads
 from llm_client import LLMClient
 from models import EvidenceFact, EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
@@ -180,7 +181,7 @@ def _template_preview(lead: LeadInput, opening_line: str) -> str:
     line = str(opening_line or "").strip()
     if not line or line.startswith("["):
         return ""
-    next_sentence = lead.campaign_context.strip() or PITCH_SENTENCE
+    next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
     return f"Hey {_first_name(lead.recipient_name)}\n\n{line}\n\n{next_sentence}"
 
 
