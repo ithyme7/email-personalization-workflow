@@ -104,8 +104,19 @@ OUTPUT_COLUMNS = [
     "send_confidence",
     "quality_flags",
     "source_urls",
-    "needs_manual_review",
+"needs_manual_review",
     "reviewer_notes",
+    # --- Sequence columns ---
+    "sequence_step",
+    "follow_up_type",
+    "sequence_opening_line",
+    "sequence_body_text",
+    "sequence_cta_text",
+    "sequence_chosen_angle",
+    "sequence_evidence_used",
+    "sequence_quality_score",
+    "sequence_quality_flags",
+    "sequence_needs_review",
 ]
 
 

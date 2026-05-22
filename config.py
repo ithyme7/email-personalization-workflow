@@ -68,6 +68,10 @@ class Settings:
     browser_locale: str = "en-US"
     browser_timezone: str = "America/New_York"
     max_requests_per_minute: int = 30
+    # --- Follow-up sequence ---
+    follow_up_sequence_enabled: bool = False
+    follow_up_max_steps: int = 4
+    follow_up_min_quality_score: float = 6.0
 
     @property
     def has_openai_key(self) -> bool:
@@ -113,6 +117,11 @@ def _float_env(name: str, default: float) -> float:
         return float(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name, str(default)).strip().lower()
+    return value in ("1", "true", "yes", "on")
 
 
 def load_settings() -> Settings:
@@ -161,6 +170,9 @@ def load_settings() -> Settings:
         app_store_country=app_store_country,
         browser_locale=browser_locale,
         browser_timezone=browser_timezone,
+        follow_up_sequence_enabled=_bool_env("FOLLOW_UP_SEQUENCE_ENABLED", False),
+        follow_up_max_steps=max(1, _int_env("FOLLOW_UP_MAX_STEPS", 4)),
+        follow_up_min_quality_score=float(os.getenv("FOLLOW_UP_MIN_QUALITY_SCORE", "6.0").strip() or "6.0"),
     )
 
 

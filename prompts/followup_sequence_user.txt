@@ -1,0 +1,25 @@
+Follow-up email for a cold outreach sequence.
+
+--- SEQUENCE CONTEXT ---
+Original email angle: {original_angle}
+Original opening line: {original_opening_line}
+Step {step_number} of {total_steps}: {step_strategy}
+
+--- RECIPIENT RESPONSE ---
+Reply status: {reply_status}
+{reply_context}
+
+--- AVOID ---
+Do not reuse these failed angles: {failed_angles}
+Do not reuse these already-used evidence items: {used_evidence}
+
+--- FRESH EVIDENCE AVAILABLE ---
+{remaining_evidence_text}
+
+--- TONE PROFILE ---
+{tone_profile_json}
+
+--- FEEDBACK FROM PREVIOUS SENDS ---
+{feedback_context}
+
+Generate a follow-up email that feels like a natural continuation. Use a different angle than the original. Return only valid JSON, no markdown.

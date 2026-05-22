@@ -17,12 +17,22 @@ from checkpoint import load_checkpoint, save_checkpoint, cleanup_checkpoint
 from defaults import _default_next_sentence
 from input_loader import load_leads
 from llm_client import LLMClient
-from models import EvidenceFact, EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
+from models import (
+    EvidenceFact,
+    EvidenceResult,
+    LeadInput,
+    PersonalizationDraft,
+    QCResult,
+    ResearchResult,
+    SequenceResult,
+    join_list,
+)
 from personalization_writer import write_personalization
 from preflight import has_blocking_failures, preflight_summary, run_preflight
 from prompt_versions import prompt_hashes, tone_profile_hash
 from quality_checker import check_quality
 from rate_limiter import RateLimiter
+from sequence_engine import generate_sequence, sequence_result_to_rows
 from run_history import append_generated_email_rows
 from feedback import SendFeedback, init_feedback_db
 from impact_analyzer import build_feedback_context
@@ -1102,6 +1112,45 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         logging.info("Exported %s sending-tool rows to %s", sending_preset, sending_output)
 
     logging.info("Exported %s rows to %s", len(rows), args.output)
+
+    # ---- Follow-up sequences genereren ----
+    if settings.follow_up_sequence_enabled:
+        sequence_rows = []
+        for row in rows:
+            if row.get("send_confidence") == "send" and row.get("research_depth", 0.0) >= 0.6:
+                lead = next((l for l in leads if l.company_name == row.get("company_name")), None)
+                if lead:
+                    draft = PersonalizationDraft(
+                        opening_line=row.get("opening_line", ""),
+                        tailored_insight=row.get("tailored_insight", ""),
+                        chosen_angle=row.get("chosen_angle", ""),
+                        evidence_used_for_copy=[row.get("evidence_used_for_copy")],
+                    )
+                    all_evidence = [
+                        row.get("evidence_points", ""),
+                        row.get("tailored_insight", ""),
+                        row.get("chosen_angle", ""),
+                    ]
+                    tone = load_tone_profile(str(getattr(args, "tone_profile", settings.tone_profile)))
+                    seq_result = generate_sequence(
+                        client=master_client,
+                        lead=lead,
+                        original_draft=draft,
+                        tone_profile=tone,
+                        all_evidence_texts=[e for e in all_evidence if e],
+                        feedback_context=fb_context,
+                        max_steps=settings.follow_up_max_steps,
+                    )
+                    sequence_rows.extend(sequence_result_to_rows(seq_result, row))
+        if sequence_rows:
+            for i, srow in enumerate(sequence_rows):
+                srow["run_id"] = run_id
+                srow["row_id"] = f"{len(rows) + i + 1}"
+                srow["example_id"] = stable_hash(run_id, srow["row_id"], srow.get("company_name", ""), srow.get("recipient_name", ""), srow.get("sequence_opening_line", ""))
+                srow.update(prompt_meta)
+                srow["tone_profile_hash"] = tone_hash
+            rows.extend(sequence_rows)
+            logging.info("Generated %d follow-up sequence rows", len(sequence_rows))
 
     # ---- Feedback: gegenereerde emails opslaan voor toekomstige leerling ----
     feedback_stored = store_generated_emails(rows)
