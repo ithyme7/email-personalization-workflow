@@ -244,10 +244,15 @@ def get_feedback_summary() -> dict[str, Any]:
 
         # Success rates per angle
         angle_stats = conn.execute("""
-            SUBSTR(chosen_angle, 1, INSTR(chosen_angle, ':') - 1) as angle_category,
-            COUNT(*) as total,
-            SUM(converted) as converted,
-            SUM(got_reply) as replied
+            SELECT
+                CASE
+                    WHEN INSTR(chosen_angle, ':') > 0
+                    THEN SUBSTR(chosen_angle, 1, INSTR(chosen_angle, ':') - 1)
+                    ELSE chosen_angle
+                END as angle_category,
+                COUNT(*) as total,
+                SUM(converted) as converted,
+                SUM(got_reply) as replied
             FROM send_feedback
             WHERE chosen_angle != ''
             GROUP BY angle_category
@@ -310,7 +315,7 @@ def get_success_patterns(limit: int = 20) -> list[dict[str, Any]]:
                 friction_type,
                 surface_checked,
                 conversion_outcome,
-                product_surface_type,
+                '' as product_surface_type,
                 COUNT(*) as times_used,
                 SUM(converted) as conversions,
                 SUM(got_reply) as replies,
@@ -318,7 +323,7 @@ def get_success_patterns(limit: int = 20) -> list[dict[str, Any]]:
                 ROUND(CAST(SUM(converted) AS FLOAT) / COUNT(*) * 100, 1) as conv_rate,
                 GROUP_CONCAT(DISTINCT opening_line) as example_opening_lines
             FROM send_feedback
-            WHERE chosen_angle != '' AND times_used >= 1
+            WHERE chosen_angle != ''
             GROUP BY chosen_angle, friction_type, surface_checked
             HAVING COUNT(*) >= 1
             ORDER BY conversions DESC, conv_rate DESC
