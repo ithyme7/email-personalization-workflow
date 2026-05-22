@@ -478,14 +478,20 @@ def _evidence_strength_score(evidence: EvidenceResult) -> int:
     return max(1, min(5, score)) if evidence.facts else 0
 
 
-def _variant_evidence(evidence: EvidenceResult, fact: EvidenceFact, allowed_facts: list[EvidenceFact]) -> EvidenceResult:
+def _variant_evidence(
+    evidence: EvidenceResult,
+    fact: EvidenceFact,
+    allowed_facts: list[EvidenceFact],
+    excluded_friction_types: set[str] | None = None,
+) -> EvidenceResult:
+    excluded = excluded_friction_types or set()
     supporting_facts = [
         candidate
         for candidate in allowed_facts
         if candidate is not fact
+        and candidate.friction_type not in excluded
         and (
-            candidate.friction_type == fact.friction_type
-            or candidate.conversion_outcome == fact.conversion_outcome
+            candidate.conversion_outcome == fact.conversion_outcome
             or candidate.surface_checked == fact.surface_checked
         )
     ]
@@ -761,7 +767,13 @@ def _process_valid_lead(
         "Option 3: choose another distinct angle if evidence allows, ideally proof, positioning, CTA, website, or visual friction.",
     ]
     for variant_index, fact in enumerate(variant_facts[: client.settings.personalization_options], 1):
-        variant_evidence = _variant_evidence(evidence, fact, selection.allowed_facts)
+        # Forceer evidence diversiteit: sluit friction types uit die al gebruikt zijn
+        excluded = frozenset(
+            variants[i][2].chosen_angle.split(":")[0].strip()
+            for i in range(len(variants))
+            if variants[i][2].chosen_angle and ":" in variants[i][2].chosen_angle
+        )
+        variant_evidence = _variant_evidence(evidence, fact, selection.allowed_facts, excluded_friction_types=excluded)
         draft, qc = _write_and_qc_variant(
             client,
             lead,
