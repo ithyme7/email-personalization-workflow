@@ -20,7 +20,7 @@ from batch_runner import run
 from config import DATA_DIR, OUTPUT_DIR, load_settings
 from cost_estimator import CostEstimate, estimate_batch_cost, price_for_model
 from delivery_policy import DELIVERY_COLUMNS, split_delivery_review_needed, strict_delivery_dataframe
-from export import CLIENT_REVIEW_COLUMNS, _client_rows
+from export import CLIENT_REVIEW_COLUMNS, _client_rows, _materialize_input_columns
 from export_mappings import preset_names, sending_tool_dataframe
 from google_sheets import (
     GoogleSheetsError,
@@ -157,7 +157,7 @@ def _custom_profile_path(
 
 def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     review_rows, _ = _client_rows(rows)
-    df = pd.DataFrame(review_rows, columns=CLIENT_REVIEW_COLUMNS)
+    df = pd.DataFrame(review_rows)
     df = apply_sendability_to_dataframe(df)
     ordered = [
         "status",
@@ -271,7 +271,16 @@ def _rows_to_review_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
         "qc_prompt_hash",
         "tone_profile_hash",
     ]
-    return df[[col for col in ordered if col in df.columns]]
+    input_columns = [col for col in df.columns if str(col).startswith("input__")]
+    output_columns = [col for col in ordered if col in df.columns]
+    output_columns.extend(col for col in input_columns if col not in output_columns)
+    return df[output_columns]
+
+
+def _review_download_df(df: pd.DataFrame) -> pd.DataFrame:
+    base_columns = [str(column) for column in df.columns if not str(column).startswith("input__")]
+    columns, rows = _materialize_input_columns(df.fillna("").to_dict("records"), base_columns)
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _delivery_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -1449,8 +1458,9 @@ def main() -> None:
         else:
             st.subheader("Export")
             df = st.session_state["review_df"]
-            csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-            xlsx_bytes = _df_to_xlsx_bytes(df)
+            review_download = _review_download_df(df)
+            csv_bytes = review_download.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            xlsx_bytes = _df_to_xlsx_bytes(review_download)
             col1, col2, col3 = st.columns(3)
             col1.download_button("Download edited CSV", csv_bytes, "personalization_review_edited.csv", "text/csv", use_container_width=True)
             col2.download_button(
@@ -1490,7 +1500,7 @@ def main() -> None:
                 )
                 st.download_button(
                     "Download review_needed CSV",
-                    review_needed.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                    _review_download_df(review_needed).to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
                     "review_needed_rows.csv",
                     "text/csv",
                     use_container_width=True,

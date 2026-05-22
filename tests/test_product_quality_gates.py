@@ -130,6 +130,37 @@ def test_company_domain_mismatch_gets_flagged() -> None:
     assert "company_name_does_not_match_website_domain" in result["mismatch_reason"]
 
 
+def test_legitimate_brand_domain_variants_do_not_trigger_mapping_warning() -> None:
+    examples = [
+        ("Little Otter", "https://littleotterhealth.com"),
+        ("Operation Red Wings Foundation", "https://orwfoundation.org"),
+        ("Inflow ADHD", "https://getinflow.io/about"),
+        ("Tiimo", "https://tiimoapp.com"),
+        ("Finch Self Care", "https://finchcare.com"),
+        ("Reflectly Pro", "https://reflectlyapp.com"),
+        ("Breathwork", "https://breathwrk.com"),
+        ("Make Mental Health Matter", "https://mmhm.org"),
+        ("Nara Therapy", "https://joinnara.com"),
+    ]
+    for company, website in examples:
+        result = evaluate_mismatch({"company": company, "website": website})
+        assert result["company_website_mismatch"] == "no", (company, website, result)
+        assert result["input_mapping_warning"] == "no", (company, website, result)
+
+
+def test_source_url_text_extracts_only_real_urls_for_mismatch() -> None:
+    result = evaluate_mismatch(
+        {
+            "company": "Breathwrk",
+            "website": "https://breathwrk.com",
+            "source_urls": "Apple public customer reviews for US region: https://apps.apple.com/us/app/breathwrk/id123 | C:\\Users\\thyme\\trace.zip",
+            "opener_option_1_source_url": "https://www.breathwrk.com/terms-and-conditions",
+        }
+    )
+    assert result["input_mapping_warning"] == "no"
+    assert "source_url_domain_does_not_match_company_domain" not in result["mismatch_reason"]
+
+
 def test_goldset_seed_contains_sdr_bridge_example() -> None:
     matches = [
         row
