@@ -83,7 +83,7 @@ def export_dataframe_to_sheet(
         spreadsheet = _gspread_client(service_account_json_path).open_by_url(sheet_url)
         try:
             worksheet = spreadsheet.worksheet(worksheet_name)
-        except Exception:
+        except Exception:  # Sheet doesn't exist yet - create it
             worksheet = spreadsheet.add_worksheet(title=worksheet_name, rows=max(len(df) + 10, 100), cols=max(len(df.columns), 20))
         values = [df.columns.tolist()] + df.fillna("").astype(str).values.tolist()
         worksheet.clear()

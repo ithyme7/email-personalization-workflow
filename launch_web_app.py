@@ -31,7 +31,7 @@ def _wait_until_ready(url: str, timeout_seconds: int = 45) -> bool:
         try:
             with urllib.request.urlopen(url, timeout=2) as response:
                 return 200 <= response.status < 500
-        except Exception:
+        except Exception:  # Connection errors, timeouts - retry
             time.sleep(0.6)
     return False
 

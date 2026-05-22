@@ -117,7 +117,8 @@ def _compute_historical_patterns(lead: Any, hours_ahead: int = 24) -> dict[int, 
             for hour, opens in hour_opens.items()
             if len(opens) >= 3  # Minimaal 3 data points per uur
         }
-    except Exception:
+    except Exception as e:
+        logging.debug("Historische data-analyse mislukt: %s", e)
         return None
 
 

@@ -139,7 +139,7 @@ class LLMClient:
                 self._record_usage(system_prompt, user_payload, cached.get("content", ""))
                 return cached
         except Exception:
-            pass
+            pass  # Cache miss — not an error; fall through to LLM call
         return None
 
     def _wait_for_rate_limit(self) -> None:

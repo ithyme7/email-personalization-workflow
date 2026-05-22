@@ -89,8 +89,8 @@ def _emit_progress(progress_callback: ProgressCallback | None, **payload: Any) -
         return
     try:
         progress_callback(payload)
-    except Exception:
-        logging.debug("Progress callback failed", exc_info=True)
+    except Exception as exc:
+        logging.debug("Progress callback failed: %s", exc)
 
 
 def _base_row(lead: LeadInput) -> dict[str, Any]:
