@@ -122,6 +122,12 @@ OUTPUT_COLUMNS = [
     "ab_variant_id",
     "ab_variant_label",
     "ab_testing_enabled",
+    # --- Send-time Optimization columns ---
+    "suggested_send_time_utc",
+    "suggested_send_timezone",
+    "send_time_confidence",
+    "send_time_source",
+    "send_time_reasoning",
 ]
 
 

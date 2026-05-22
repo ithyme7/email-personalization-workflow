@@ -75,6 +75,9 @@ class Settings:
     follow_up_min_quality_score: float = 6.0
     # --- A/B Testing ---
     ab_testing_enabled: bool = False
+    # --- Send-time Optimization ---
+    send_time_optimization_enabled: bool = False
+    send_time_optimization_hours_ahead: int = 24
 
     @property
     def has_openai_key(self) -> bool:
@@ -177,6 +180,8 @@ def load_settings() -> Settings:
         follow_up_max_steps=max(1, _int_env("FOLLOW_UP_MAX_STEPS", 4)),
         follow_up_min_quality_score=float(os.getenv("FOLLOW_UP_MIN_QUALITY_SCORE", "6.0").strip() or "6.0"),
         ab_testing_enabled=_bool_env("AB_TESTING_ENABLED", False),
+        send_time_optimization_enabled=_bool_env("SEND_TIME_OPTIMIZATION_ENABLED", False),
+        send_time_optimization_hours_ahead=max(1, _int_env("SEND_TIME_OPTIMIZATION_HOURS_AHEAD", 24)),
     )
 
 

@@ -40,6 +40,7 @@ from prompt_versions import prompt_hashes, tone_profile_hash
 from quality_checker import check_quality
 from rate_limiter import RateLimiter
 from sequence_engine import generate_sequence, sequence_result_to_rows
+from send_time_optimizer import compute_send_time, format_send_time
 from run_history import append_generated_email_rows
 from feedback import SendFeedback, init_feedback_db
 from impact_analyzer import build_feedback_context
@@ -1198,7 +1199,25 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
             rows.extend(sequence_rows)
             logging.info("Generated %d follow-up sequence rows", len(sequence_rows))
 
-    # ---- Feedback: gegenereerde emails opslaan voor toekomstige leerling ----
+    # ---- Send-time optimization ----
+    if settings.send_time_optimization_enabled:
+        logging.info("Computing optimal send times for %d leads...", len(rows))
+        for row in rows:
+            lead_match = next((l for l in leads if l.company_name == row.get("company_name")), None)
+            if lead_match:
+                advice = compute_send_time(lead_match, days_ahead=0)
+                row["suggested_send_time_utc"] = advice.send_at_utc.isoformat()
+                row["suggested_send_timezone"] = advice.timezone_label
+                row["send_time_confidence"] = advice.confidence
+                row["send_time_source"] = advice.source
+                row["send_time_reasoning"] = advice.reasoning
+            else:
+                row["suggested_send_time_utc"] = ""
+                row["suggested_send_timezone"] = ""
+                row["send_time_confidence"] = 0.0
+                row["send_time_source"] = ""
+                row["send_time_reasoning"] = "No matching lead for timezone detection"
+        logging.info("Send-time optimization complete.")
     # ---- Store A/B experiment results ----
     if settings.ab_testing_enabled:
         for row in rows:
