@@ -32,6 +32,14 @@ def load_prompt(name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def load_prompt_pair(name: str) -> tuple[str, str]:
+    """Load a (system_prompt, user_template) pair from
+    prompts/<name>_system.txt and prompts/<name>_user.txt."""
+    system = PROMPTS_DIR / f"{name}_system.txt"
+    user = PROMPTS_DIR / f"{name}_user.txt"
+    return system.read_text(encoding="utf-8"), user.read_text(encoding="utf-8")
+
+
 def parse_json_object(text: str) -> dict[str, Any]:
     try:
         parsed = json.loads(text)

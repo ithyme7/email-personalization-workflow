@@ -1,0 +1,37 @@
+Evaluate this cold email draft for quality and conversion potential.
+
+--- LEAD DATA ---
+Company: {company_name}
+Website: {website_url}
+Recipient name: {recipient_name}
+Recipient role: {recipient_role}
+Campaign context: {campaign_context}
+LinkedIn observation: {linkedin_observation}
+App flow observation: {app_flow_observation}
+Recent news note: {recent_news_note}
+Competitor context: {competitor_context}
+
+--- EMAIL TEMPLATE ---
+The draft is evaluated in context of this email:
+  Hey [Name]
+  {opening_line}
+  {required_next_sentence}
+  In a recent app project, session replays showed users bouncing off a paywall because the copy was unclear. After the paywall was rewritten, conversion improved materially.
+
+--- EVIDENCE ---
+{evidence_text}
+
+--- DRAFT BEING REVIEWED ---
+Opening line: {draft_opening_line}
+Tailored insight: {draft_tailored_insight}
+Chosen angle: {draft_chosen_angle}
+Evidence used for copy: {draft_evidence_used}
+
+--- TONE PROFILE ---
+{tone_profile_text}
+
+--- QC TASK ---
+1. Score the draft 1–10 on: specificity to this company, evidence grounding, tone quality, conversion focus, and natural flow into the template.
+2. Flag any issues from the mandatory flags list.
+3. If the draft fails, provide a suggested_rewrite with an improved opening_line and/or tailored_insight that addresses the flagged issues. Keep the good parts; only rewrite what is broken.
+4. List all reasons for your score as a JSON array.
