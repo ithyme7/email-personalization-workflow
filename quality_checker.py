@@ -41,6 +41,7 @@ def check_quality(
     evidence: EvidenceResult,
     draft: PersonalizationDraft,
     tone_profile: ToneProfile | None = None,
+    temperature: float = 0.4,
 ) -> QCResult:
     next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
 
@@ -68,7 +69,7 @@ def check_quality(
 
     local_flags = _local_flags(draft, evidence, lead)
     try:
-        raw = client.complete_json(SYSTEM_TEMPLATE, user_text, temperature=0.4)
+        raw = client.complete_json(SYSTEM_TEMPLATE, user_text, temperature=temperature)
     except LLMError as exc:
         return QCResult(
             score=0,

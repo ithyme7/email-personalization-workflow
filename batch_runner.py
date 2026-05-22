@@ -511,34 +511,81 @@ def _write_and_qc_variant(
     variant_index: int,
     avoid_opening_lines: list[str],
     variant_instruction: str,
+    max_iterations: int = 3,
 ) -> tuple[PersonalizationDraft, QCResult]:
-    draft = write_personalization(
-        client,
-        lead,
-        evidence,
-        tone_profile,
-        variant_index=variant_index,
-        avoid_opening_lines=avoid_opening_lines,
-        variant_instruction=variant_instruction,
-    )
-    qc = check_quality(client, lead, evidence, draft, tone_profile)
-    if not qc.passed:
-        rewrite_reasons = qc.reasons + qc.quality_flags
-        rewritten = write_personalization(
+    """Generate + QC a personalization variant with iterative refinement.
+
+    Each iteration:
+      1. Generate draft at decreasing temperature (0.6 → 0.4)
+      2. Run quality check
+      3. If QC fails, feed suggested_rewrite back as starting point
+      4. Track best result across all iterations
+      5. Early exit on score >= 8 with no blocking flags
+    """
+    best_draft: PersonalizationDraft | None = None
+    best_qc: QCResult | None = None
+    last_qc_suggested_rewrite: dict[str, str] = {}
+    used_opening_lines: list[str] = list(avoid_opening_lines)
+    previous_failure_reasons: list[str] = []
+
+    for iteration in range(max_iterations):
+        # Temperature decay: 0.6, 0.55, 0.5, ... floor at 0.4
+        temperature = max(0.4, 0.6 - 0.05 * iteration)
+        qc_temperature = max(0.3, 0.4 - 0.05 * iteration)
+
+        draft = write_personalization(
             client,
             lead,
             evidence,
             tone_profile,
-            previous_failure_reasons=rewrite_reasons,
+            previous_failure_reasons=previous_failure_reasons if iteration > 0 else None,
             variant_index=variant_index,
-            avoid_opening_lines=avoid_opening_lines + [draft.opening_line],
+            avoid_opening_lines=used_opening_lines,
             variant_instruction=variant_instruction,
-            qc_suggested_rewrite=qc.suggested_rewrite,
+            qc_suggested_rewrite=last_qc_suggested_rewrite if iteration > 0 else None,
+            temperature=temperature,
         )
-        rewritten_qc = check_quality(client, lead, evidence, rewritten, tone_profile)
-        if rewritten_qc.score >= qc.score:
-            return rewritten, rewritten_qc
-    return draft, qc
+        qc = check_quality(
+            client, lead, evidence, draft, tone_profile, temperature=qc_temperature
+        )
+
+        logging.info(
+            "Variant %d iteration %d/%d: score=%d passed=%s flags=%s temp=%.2f",
+            variant_index,
+            iteration + 1,
+            max_iterations,
+            qc.score,
+            qc.passed,
+            qc.quality_flags,
+            temperature,
+        )
+
+        # Track best result seen so far (prefer passing > higher score > newer)
+        if best_qc is None or qc.passed and not best_qc.passed or (
+            qc.score > best_qc.score and qc.passed == best_qc.passed
+        ):
+            best_draft = draft
+            best_qc = qc
+
+        # Early exit: strong pass, no need to refine further
+        if qc.passed and qc.score >= 8:
+            break
+
+        # Prepare feedback for next iteration
+        previous_failure_reasons = qc.reasons + qc.quality_flags
+        if qc.suggested_rewrite:
+            last_qc_suggested_rewrite = qc.suggested_rewrite
+        used_opening_lines.append(draft.opening_line)
+
+    assert best_draft is not None and best_qc is not None
+    if not best_qc.passed:
+        logging.info(
+            "Variant %d: best score after %d iteration(s) was %d (did not pass)",
+            variant_index,
+            max_iterations,
+            best_qc.score,
+        )
+    return best_draft, best_qc
 
 
 def _store_variant(
@@ -723,6 +770,7 @@ def _process_valid_lead(
             variant_index,
             avoid_opening_lines,
             variant_instructions[min(variant_index - 1, len(variant_instructions) - 1)],
+            max_iterations=client.settings.max_refinement_iterations,
         )
         variant_flags = set(selection.quality_flags).union(qc.quality_flags)
         variant_needs_review = (

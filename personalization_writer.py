@@ -76,6 +76,7 @@ def write_personalization(
     avoid_opening_lines: list[str] | None = None,
     variant_instruction: str = "",
     qc_suggested_rewrite: dict[str, str] | None = None,
+    temperature: float = 0.6,
 ) -> PersonalizationDraft:
     required_next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
     user_text = _render_user_payload(
@@ -90,7 +91,7 @@ def write_personalization(
         qc_suggested_rewrite=qc_suggested_rewrite,
     )
     try:
-        raw = client.complete_json(SYSTEM_TEMPLATE, user_text, temperature=0.6)
+        raw = client.complete_json(SYSTEM_TEMPLATE, user_text, temperature=temperature)
     except LLMError as exc:
         return PersonalizationDraft(
             opening_line="",

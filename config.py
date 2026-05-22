@@ -150,6 +150,7 @@ def load_settings() -> Settings:
         max_llm_calls_per_batch=max(0, _int_env("MAX_LLM_CALLS_PER_BATCH", 0)),
         max_workers=max(1, _int_env("MAX_WORKERS", 4)),
         personalization_options=max(1, min(3, _int_env("PERSONALIZATION_OPTIONS", 2))),
+        max_refinement_iterations=max(1, _int_env("MAX_REFINEMENT_ITERATIONS", 3)),
         max_requests_per_minute=max(1, _int_env("MAX_REQUESTS_PER_MINUTE", 30)),
         research_region=region,
         app_store_country=app_store_country,
