@@ -1,5 +1,9 @@
 Process the following lead and evidence to personalize a cold email.
 
+--- RESEARCH DEPTH ---
+Research depth score: {research_depth} (0.0 = minimal research, 1.0 = full deep research)
+Use this to calibrate the specificity and depth of your personalization. Higher depth means more evidence is available and more specific insights should be used.
+
 --- LEAD DATA ---
 Company: {company_name}
 Website: {website_url}

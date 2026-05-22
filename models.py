@@ -36,7 +36,8 @@ OUTPUT_COLUMNS = [
     "screenshot_url",
     "recent_news_url",
     "recent_news_note",
-    "competitor_context",
+"competitor_context",
+    "research_depth",
     "friction_checklist",
     "app_check_status",
     "recommended_manual_check",
@@ -130,6 +131,7 @@ class LeadInput:
     validation_errors: list[str] = field(default_factory=list)
     is_duplicate: bool = False
     original_columns: dict[str, str] = field(default_factory=dict)
+    research_depth: float = 1.0
 
 
 @dataclass

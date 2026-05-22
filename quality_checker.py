@@ -43,6 +43,7 @@ def check_quality(
     tone_profile: ToneProfile | None = None,
     temperature: float = 0.4,
     feedback_context: str = "",
+    research_depth: float = 1.0,
 ) -> QCResult:
     next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
 
@@ -67,6 +68,7 @@ def check_quality(
             ensure_ascii=False,
         ),
         feedback_context=feedback_context,
+        research_depth=research_depth,
     )
 
     local_flags = _local_flags(draft, evidence, lead)

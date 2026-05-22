@@ -24,6 +24,7 @@ def _render_user_payload(
     previous_failure_reasons: list[str] | None = None,
     qc_suggested_rewrite: dict[str, str] | None = None,
     feedback_context: str = "",
+    research_depth: float = 1.0,
 ) -> str:
     """Fill the user template with the lead-specific data."""
     evidence_payload = json.dumps(evidence_to_payload(evidence))
@@ -65,6 +66,7 @@ def _render_user_payload(
             tone_profile.to_prompt_payload() if tone_profile else {}
         ),
         feedback_context=feedback_context,
+        research_depth=research_depth,
     )
 
 
@@ -80,6 +82,7 @@ def write_personalization(
     qc_suggested_rewrite: dict[str, str] | None = None,
     temperature: float = 0.6,
     feedback_context: str = "",
+    research_depth: float = 1.0,
 ) -> PersonalizationDraft:
     required_next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
     user_text = _render_user_payload(
@@ -93,6 +96,7 @@ def write_personalization(
         previous_failure_reasons=previous_failure_reasons,
         qc_suggested_rewrite=qc_suggested_rewrite,
         feedback_context=feedback_context,
+        research_depth=research_depth,
     )
     try:
         raw = client.complete_json(SYSTEM_TEMPLATE, user_text, temperature=temperature)

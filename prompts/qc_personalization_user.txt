@@ -1,5 +1,9 @@
 Evaluate this cold email draft for quality and conversion potential.
 
+--- RESEARCH DEPTH ---
+Research depth score: {research_depth} (0.0 = minimal research, 1.0 = full deep research)
+Consider this when evaluating specificity and evidence grounding — higher depth means higher expectations for specific, evidence-backed copy.
+
 --- LEAD DATA ---
 Company: {company_name}
 Website: {website_url}

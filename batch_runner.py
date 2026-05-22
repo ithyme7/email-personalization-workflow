@@ -94,6 +94,7 @@ def _base_row(lead: LeadInput) -> dict[str, Any]:
         "recent_news_url": lead.recent_news_url,
         "recent_news_note": lead.recent_news_note,
         "competitor_context": lead.competitor_context,
+        "research_depth": lead.research_depth,
         "friction_checklist": "",
         "app_check_status": "",
         "recommended_manual_check": "",
@@ -521,6 +522,7 @@ def _write_and_qc_variant(
     variant_instruction: str,
     max_iterations: int = 3,
     feedback_context: str = "",
+    research_depth: float = 1.0,
 ) -> tuple[PersonalizationDraft, QCResult]:
     """Generate + QC a personalization variant with iterative refinement.
 
@@ -554,11 +556,13 @@ def _write_and_qc_variant(
             qc_suggested_rewrite=last_qc_suggested_rewrite if iteration > 0 else None,
             temperature=temperature,
             feedback_context=feedback_context,
+            research_depth=research_depth,
         )
         qc = check_quality(
             client, lead, evidence, draft, tone_profile,
             temperature=qc_temperature,
             feedback_context=feedback_context,
+            research_depth=research_depth,
         )
 
         logging.info(
@@ -644,9 +648,14 @@ def _process_valid_lead(
 ) -> dict[str, Any]:
     row = _base_row(lead)
 
-    research = research_company(lead, client.settings)
+    # Lead-weighted research: schaal research-inspanning op basis van research_depth
+    max_pages = max(1, round(lead.research_depth * client.settings.max_pages_per_company))
+    research = research_company(lead, client.settings, max_pages=max_pages)
+
+    # Deep research alleen voor leads met voldoende depth
     deep_research = None
-    if deep_research_enabled:
+    effective_deep_research = deep_research_enabled and lead.research_depth >= 0.6
+    if effective_deep_research:
         deep_research = collect_deep_research(lead, client.settings)
         deep_prompt_text = deep_research.to_prompt_text()
         if deep_prompt_text:

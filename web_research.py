@@ -208,7 +208,7 @@ def _discover_priority_links(homepage_url: str, settings: Settings, rendered_lin
     return unique
 
 
-def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
+def research_company(lead: LeadInput, settings: Settings, max_pages: int | None = None) -> ResearchResult:
     if not lead.is_valid:
         return ResearchResult(
             needs_manual_review=True,
@@ -256,8 +256,9 @@ def research_company(lead: LeadInput, settings: Settings) -> ResearchResult:
 
     try:
         result.pages.append(homepage)
+        effective_max = max_pages if max_pages is not None else settings.max_pages_per_company
         for link in _discover_priority_links(lead.website_url, settings, rendered_homepage_links):
-            if len(result.pages) >= settings.max_pages_per_company:
+            if len(result.pages) >= effective_max:
                 break
             page = _fetch_page(link, settings)
             if browser_rendering_enabled(settings) and (
