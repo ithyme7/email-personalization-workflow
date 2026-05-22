@@ -117,6 +117,11 @@ OUTPUT_COLUMNS = [
     "sequence_quality_score",
     "sequence_quality_flags",
     "sequence_needs_review",
+    # --- A/B Test columns ---
+    "ab_experiment_id",
+    "ab_variant_id",
+    "ab_variant_label",
+    "ab_testing_enabled",
 ]
 
 

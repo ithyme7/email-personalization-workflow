@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,6 +9,12 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from ab_testing import (
+    ExperimentAssignment,
+    assign_lead_to_variant,
+    get_experiment,
+    record_experiment_result,
+)
 from angle_selector import evidence_for_selected_angle, select_angle
 from config import ensure_directories, load_settings
 from deep_research import collect_deep_research
@@ -398,6 +405,12 @@ def _offline_research_row(lead: LeadInput, settings: Settings, deep_research_ena
             ),
         }
     )
+    # A/B experiment: store assignment metadata
+    if ab_assignment:
+        row["ab_experiment_id"] = ab_assignment.experiment_id
+        row["ab_variant_id"] = ab_assignment.variant_id
+        row["ab_variant_label"] = ab_assignment.variant_label
+
     app_check_status, manual_check = _manual_check_recommendation(lead, row, research)
     row["app_check_status"] = app_check_status
     row["recommended_manual_check"] = manual_check
@@ -533,6 +546,7 @@ def _write_and_qc_variant(
     max_iterations: int = 3,
     feedback_context: str = "",
     research_depth: float = 1.0,
+    ab_variant_label: str = "",
 ) -> tuple[PersonalizationDraft, QCResult]:
     """Generate + QC a personalization variant with iterative refinement.
 
@@ -567,6 +581,7 @@ def _write_and_qc_variant(
             temperature=temperature,
             feedback_context=feedback_context,
             research_depth=research_depth,
+            ab_variant_label=ab_variant_label,
         )
         qc = check_quality(
             client, lead, evidence, draft, tone_profile,
@@ -655,6 +670,7 @@ def _process_valid_lead(
     deep_research_enabled: bool,
     tone_profile_name: str,
     feedback_context: str = "",
+    ab_assignment: ExperimentAssignment | None = None,
 ) -> dict[str, Any]:
     row = _base_row(lead)
 
@@ -787,11 +803,18 @@ def _process_valid_lead(
         variant_facts.append(variant_facts[-1])
     variants: list[tuple[int, PersonalizationDraft, QCResult, bool]] = []
     avoid_opening_lines: list[str] = []
-    variant_instructions = [
+    # Build variant instructions, enriched with A/B context if assigned
+    base_instructions = [
         "Option 1: choose the strongest sendable friction angle.",
         "Option 2: choose a meaningfully different angle if evidence allows, ideally user feedback, app-store review, onboarding, or conversion friction.",
         "Option 3: choose another distinct angle if evidence allows, ideally proof, positioning, CTA, website, or visual friction.",
     ]
+    if ab_assignment:
+        base_instructions = [
+            f"{instr} [A/B Experiment: {ab_assignment.experiment_id}, assigned variant: \"{ab_assignment.variant_label}\" ({ab_assignment.variant_id})]"
+            for instr in base_instructions
+        ]
+
     for variant_index, fact in enumerate(variant_facts[: client.settings.personalization_options], 1):
         # Forceer evidence diversiteit: sluit friction types uit die al gebruikt zijn
         excluded = frozenset(
@@ -807,9 +830,10 @@ def _process_valid_lead(
             tone_profile,
             variant_index,
             avoid_opening_lines,
-            variant_instructions[min(variant_index - 1, len(variant_instructions) - 1)],
+            base_instructions[min(variant_index - 1, len(base_instructions) - 1)],
             max_iterations=client.settings.max_refinement_iterations,
             feedback_context=feedback_context,
+            ab_variant_label=ab_assignment.variant_label if ab_assignment else "",
         )
         variant_flags = set(selection.quality_flags).union(qc.quality_flags)
         variant_needs_review = (
@@ -867,6 +891,12 @@ def _process_valid_lead(
             "reviewer_notes": join_list(notes),
         }
     )
+    # A/B experiment: store assignment metadata
+    if ab_assignment:
+        row["ab_experiment_id"] = ab_assignment.experiment_id
+        row["ab_variant_id"] = ab_assignment.variant_id
+        row["ab_variant_label"] = ab_assignment.variant_label
+
     app_check_status, manual_check = _manual_check_recommendation(lead, row, research)
     row["app_check_status"] = app_check_status
     row["recommended_manual_check"] = manual_check
@@ -887,6 +917,22 @@ def _process_single_lead(
     client = LLMClient(settings, rate_limiter=rate_limiter)
 
     lead_label = lead.company_name or lead.website_url or "unnamed row"
+
+    # A/B experiment assignment (deterministic per lead)
+    ab_assignment: ExperimentAssignment | None = None
+    if settings.ab_testing_enabled:
+        # Determine experiment ID from args or config
+        experiment_id = getattr(args, "ab_experiment_id", None) or os.getenv("AB_EXPERIMENT_ID", "default")
+        # Check experiment is registered
+        exp = get_experiment(experiment_id)
+        if exp and exp.enabled:
+            ab_assignment = assign_lead_to_variant(
+                experiment_id=experiment_id,
+                lead_id=f"row_{lead.row_id}" if hasattr(lead, "row_id") else lead.company_name,
+                variants=exp.variants,
+                strategy=exp.allocation_strategy,
+                fixed_weights=exp.fixed_weights,
+            )
 
     if not lead.is_valid:
         row = _attach_run_metadata(
@@ -1153,6 +1199,26 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
             logging.info("Generated %d follow-up sequence rows", len(sequence_rows))
 
     # ---- Feedback: gegenereerde emails opslaan voor toekomstige leerling ----
+    # ---- Store A/B experiment results ----
+    if settings.ab_testing_enabled:
+        for row in rows:
+            ab_exp_id = row.get("ab_experiment_id")
+            ab_var_id = row.get("ab_variant_id")
+            ab_var_label = row.get("ab_variant_label")
+            if ab_exp_id and ab_var_id:
+                record_experiment_result(
+                    experiment_id=ab_exp_id,
+                    variant_id=ab_var_id,
+                    lead_id=str(row.get("row_id", "")),
+                    was_opened=bool(row.get("was_opened", False)),
+                    got_reply=bool(row.get("got_reply", False)),
+                    converted=bool(row.get("converted", False)),
+                )
+                logging.info(
+                    "A/B result stored: exp=%s variant=%s lead=%s converted=%s",
+                    ab_exp_id, ab_var_id, row.get("row_id", ""), row.get("converted", ""),
+                )
+
     feedback_stored = store_generated_emails(rows)
     if feedback_stored:
         logging.info("Stored %d generated emails in feedback database for future learning.", feedback_stored)

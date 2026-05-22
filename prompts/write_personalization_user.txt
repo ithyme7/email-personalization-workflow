@@ -41,6 +41,7 @@ If this is a rewrite attempt, the previous draft was:
 
 --- VARIANT INSTRUCTION ---
 Variant index: {variant_index}
+Variant A/B label: {ab_variant_label}
 Avoid these opening lines: {avoid_opening_lines}
 Variant-specific instruction: {variant_instruction}
 

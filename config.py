@@ -63,6 +63,7 @@ class Settings:
     max_llm_calls_per_batch: int
     max_workers: int
     personalization_options: int = 3
+    max_refinement_iterations: int = 3
     research_region: str = "us"
     app_store_country: str = "us"
     browser_locale: str = "en-US"
@@ -72,6 +73,8 @@ class Settings:
     follow_up_sequence_enabled: bool = False
     follow_up_max_steps: int = 4
     follow_up_min_quality_score: float = 6.0
+    # --- A/B Testing ---
+    ab_testing_enabled: bool = False
 
     @property
     def has_openai_key(self) -> bool:
@@ -173,6 +176,7 @@ def load_settings() -> Settings:
         follow_up_sequence_enabled=_bool_env("FOLLOW_UP_SEQUENCE_ENABLED", False),
         follow_up_max_steps=max(1, _int_env("FOLLOW_UP_MAX_STEPS", 4)),
         follow_up_min_quality_score=float(os.getenv("FOLLOW_UP_MIN_QUALITY_SCORE", "6.0").strip() or "6.0"),
+        ab_testing_enabled=_bool_env("AB_TESTING_ENABLED", False),
     )
 
 

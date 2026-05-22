@@ -25,6 +25,7 @@ def _render_user_payload(
     qc_suggested_rewrite: dict[str, str] | None = None,
     feedback_context: str = "",
     research_depth: float = 1.0,
+    ab_variant_label: str = "",
 ) -> str:
     """Fill the user template with the lead-specific data."""
     evidence_payload = json.dumps(evidence_to_payload(evidence))
@@ -67,6 +68,7 @@ def _render_user_payload(
         ),
         feedback_context=feedback_context,
         research_depth=research_depth,
+        ab_variant_label=ab_variant_label,
     )
 
 
@@ -83,6 +85,7 @@ def write_personalization(
     temperature: float = 0.6,
     feedback_context: str = "",
     research_depth: float = 1.0,
+    ab_variant_label: str = "",
 ) -> PersonalizationDraft:
     required_next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
     user_text = _render_user_payload(
