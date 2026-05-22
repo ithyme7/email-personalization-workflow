@@ -107,18 +107,48 @@ OPTIONAL_COLUMNS = [
 ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
 
 CLIENT_COLUMN_ALIASES = {
+    "Organization Name": "company_name",
+    "Organization Name.1": "company_name",
     "Company Name": "company_name",
+    "Company": "company_name",
     "Website": "website_url",
+    "Website URL": "website_url",
+    "Company Website": "website_url",
+    "Domain": "website_url",
     "Linkedin": "linkedin_url",
     "LinkedIn": "linkedin_url",
+    "LinkedIn URL": "linkedin_url",
     "App Store": "app_store_url",
+    "App Store URL": "app_store_url",
     "Google Play": "app_store_url",
+    "Google Play URL": "app_store_url",
     "First Name": "recipient_name",
+    "Name": "recipient_name",
+    "Full Name": "recipient_name",
+    "Contact Name": "recipient_name",
     "Person Name": "recipient_name",
     "Job Title": "recipient_role",
     "Job Tile": "recipient_role",
+    "Title": "recipient_role",
     "Role": "recipient_role",
-    "Email": "optional_notes",
+}
+
+CANONICAL_COLUMN_SOURCES = {
+    "company_name": ["company_name", "Company Name", "Organization Name", "Company", "Organization Name.1"],
+    "website_url": ["website_url", "Website", "Website URL", "Company Website", "Domain"],
+    # Person-level LinkedIn exports often use "Linkedin"; company-level columns often use "LinkedIn".
+    "linkedin_url": ["linkedin_url", "Linkedin", "LinkedIn URL", "Person Linkedin", "Person LinkedIn", "LinkedIn"],
+    "recipient_name": ["recipient_name", "Person Name", "Full Name", "Contact Name", "First Name", "Name"],
+    "recipient_role": ["recipient_role", "Role", "Job Title", "Job Tile", "Title"],
+    "app_store_url": ["app_store_url", "App Store URL", "Google Play URL", "App Store", "Google Play"],
+    "linkedin_observation": ["linkedin_observation", "LinkedIn Observation"],
+    "linkedin_source_note": ["linkedin_source_note", "LinkedIn Source Note"],
+    "app_flow_observation": ["app_flow_observation", "App Flow Observation", "Manual App Observation"],
+    "app_flow_source_note": ["app_flow_source_note", "App Flow Source Note"],
+    "screenshot_url": ["screenshot_url", "Screenshot URL", "Screenshot"],
+    "recent_news_url": ["recent_news_url", "Recent News URL"],
+    "recent_news_note": ["recent_news_note", "Recent News Note", "Product Update Note"],
+    "competitor_context": ["competitor_context", "Competitor Context"],
 }
 
 
@@ -155,13 +185,8 @@ def _first_present(row: pd.Series, candidates: list[str]) -> str:
 
 def _prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     working = _clean_dataframe(df)
-    rename_map = {
-        column: CLIENT_COLUMN_ALIASES[column]
-        for column in working.columns
-        if column in CLIENT_COLUMN_ALIASES and CLIENT_COLUMN_ALIASES[column] not in working.columns
-    }
-    if rename_map:
-        working = working.rename(columns=rename_map)
+    _fill_down_company_context(working)
+    _apply_canonical_columns(working)
     _fill_down_company_context(working)
     return working
 
@@ -179,6 +204,7 @@ def _clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 def _fill_down_company_context(working: pd.DataFrame) -> None:
     company_source_columns = [
+        "company_name",
         "Organization Name",
         "Company Name",
         "Last Funding Amount",
@@ -202,6 +228,24 @@ def _fill_down_company_context(working: pd.DataFrame) -> None:
     for column in company_source_columns:
         if column in working.columns:
             working[column] = working[column].replace("", pd.NA).ffill().fillna("")
+
+
+def _has_value(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip().replace("—", "").ne("")
+
+
+def _apply_canonical_columns(working: pd.DataFrame) -> None:
+    for target, candidates in CANONICAL_COLUMN_SOURCES.items():
+        present = [candidate for candidate in candidates if candidate in working.columns]
+        if not present:
+            continue
+        if target not in working.columns:
+            working[target] = ""
+        for source_column in present:
+            source = working[source_column].fillna("").astype(str)
+            target_blank = ~_has_value(working[target])
+            source_has_value = _has_value(source)
+            working.loc[target_blank & source_has_value, target] = source[target_blank & source_has_value]
 
 
 def _company_from_website(website_url: str) -> str:
@@ -231,7 +275,7 @@ def load_leads(
         raise FileNotFoundError(f"Input CSV not found: {path}")
 
     raw_df = _clean_dataframe(pd.read_csv(path, dtype=str).fillna(""))
-    _fill_down_company_context(raw_df)
+    original_df = raw_df.copy()
     df = _prepare_dataframe(raw_df)
     has_standard_columns = all(column in df.columns for column in REQUIRED_COLUMNS)
     has_client_columns = "Organization Name" in df.columns and "Website" in df.columns
@@ -258,7 +302,7 @@ def load_leads(
             errors.append("company_name is required")
 
         campaign_context = _first_present(row, ["campaign_context"]) or default_campaign_context
-        original_row = raw_df.iloc[index] if index < len(raw_df) else row
+        original_row = original_df.iloc[index] if index < len(original_df) else row
         lead = LeadInput(
             company_name=company_name,
             website_url=website_url,

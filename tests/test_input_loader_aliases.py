@@ -40,6 +40,35 @@ def test_client_sheet_alias_columns_with_trailing_spaces() -> None:
     assert _base_row(leads[0])["input__Email"] == "helen@example.com"
 
 
+def test_clay_style_duplicate_organization_name_sheet_loads_contacts() -> None:
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "mental_health_sheet.csv"
+        path.write_text(
+            "\n".join(
+                [
+                    "Organization Name,Last Funding Amount,Approx USD Equivalent,Website,Twitter,Facebook,LinkedIn,Contact Email,Number of Articles,Number of Employees,Number of Founders,Founders,icp_match,b2c_category,Organization Name,Person Name,Role,Email,Status,Linkedin,Source,Personalised Line",
+                    "Behavidence,\"$4,300,000\",\"$4,300,000\",www.behavidence.com,—,https://www.facebook.com/behavidence,https://www.linkedin.com/company/behavidence,health@behavidence.com,42,1-10,4,\"Girish Srinivasan, Roy Cohen\",yes,Mental Health,behavidence,Girish Srinivasan,Co-Founder,girish@behavidence.com,Verified,http://www.linkedin.com/in/srinivasangirish,Linkedin,",
+                    ",,,,,,,,,,,,,,,Roy Cohen,Co-Founder,roy@behavidence.com,Verified,http://www.linkedin.com/in/roy-cohen-281805200,Linkedin,",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        leads = load_leads(path, "campaign", deduplicate=False)
+
+    assert len(leads) == 2
+    assert all(lead.is_valid for lead in leads)
+    assert leads[0].company_name == "Behavidence"
+    assert leads[0].website_url == "https://behavidence.com"
+    assert leads[0].recipient_name == "Girish Srinivasan"
+    assert leads[0].linkedin_url == "http://www.linkedin.com/in/srinivasangirish"
+    assert leads[1].company_name == "Behavidence"
+    assert leads[1].website_url == "https://behavidence.com"
+    assert leads[1].recipient_name == "Roy Cohen"
+    assert leads[1].linkedin_url == "http://www.linkedin.com/in/roy-cohen-281805200"
+    assert leads[1].original_columns["Organization Name"] == ""
+
+
 if __name__ == "__main__":
     test_client_sheet_alias_columns_with_trailing_spaces()
+    test_clay_style_duplicate_organization_name_sheet_loads_contacts()
     print("input_loader_alias_tests_ok")
