@@ -532,6 +532,7 @@ def _write_and_qc_variant(
             variant_index=variant_index,
             avoid_opening_lines=avoid_opening_lines + [draft.opening_line],
             variant_instruction=variant_instruction,
+            qc_suggested_rewrite=qc.suggested_rewrite,
         )
         rewritten_qc = check_quality(client, lead, evidence, rewritten, tone_profile)
         if rewritten_qc.score >= qc.score:

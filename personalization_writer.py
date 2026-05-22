@@ -15,6 +15,7 @@ def write_personalization(
     variant_index: int = 1,
     avoid_opening_lines: list[str] | None = None,
     variant_instruction: str = "",
+    qc_suggested_rewrite: dict[str, str] | None = None,
 ) -> PersonalizationDraft:
     prompt = load_prompt("write_personalization.txt")
     next_sentence = lead.campaign_context.strip() or "We help mobile app teams with this type of work, figure out where users drop off and why."
@@ -50,6 +51,7 @@ def write_personalization(
         "variant_index": variant_index,
         "avoid_opening_lines": avoid_opening_lines or [],
         "variant_instruction": variant_instruction,
+        "qc_suggested_rewrite": qc_suggested_rewrite or {},
     }
     try:
         raw = client.complete_json(prompt, payload, temperature=0.6)
