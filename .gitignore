@@ -33,3 +33,4 @@ data/campaign_feedback/*
 *.exe
 .DS_Store
 Thumbs.db
+data/

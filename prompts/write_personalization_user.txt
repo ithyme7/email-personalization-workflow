@@ -1,0 +1,51 @@
+Process the following lead and evidence to personalize a cold email.
+
+--- RESEARCH DEPTH ---
+Research depth score: {research_depth} (0.0 = minimal research, 1.0 = full deep research)
+Use this to calibrate the specificity and depth of your personalization. Higher depth means more evidence is available and more specific insights should be used.
+
+--- LEAD DATA ---
+Company: {company_name}
+Website: {website_url}
+Recipient name: {recipient_name}
+Recipient role: {recipient_role}
+Campaign context: {campaign_context}
+Optional notes: {optional_notes}
+LinkedIn observation: {linkedin_observation}
+LinkedIn source note: {linkedin_source_note}
+App store URL: {app_store_url}
+App flow observation: {app_flow_observation}
+App flow source note: {app_flow_source_note}
+Screenshot URL: {screenshot_url}
+Recent news URL: {recent_news_url}
+Recent news note: {recent_news_note}
+Competitor context: {competitor_context}
+
+--- EMAIL TEMPLATE ---
+The opening line will be inserted into:
+  Hey [Name]
+  {opening_line}
+  {required_next_sentence}
+  In a recent app project, session replays showed users bouncing off a paywall because the copy was unclear. After the paywall was rewritten, conversion improved materially.
+
+--- REQUIRED NEXT SENTENCE ---
+{required_next_sentence}
+
+--- EVIDENCE ---
+Return this JSON shape for the evidence portion only — no extra text, no markdown:
+{evidence_json}
+
+--- DRAFT (if rewriting) ---
+If this is a rewrite attempt, the previous draft was:
+{previous_draft_json}
+
+--- VARIANT INSTRUCTION ---
+Variant index: {variant_index}
+Variant A/B label: {ab_variant_label}
+Avoid these opening lines: {avoid_opening_lines}
+Variant-specific instruction: {variant_instruction}
+
+--- TONE PROFILE ---
+{tone_profile_json}
+
+{feedback_context}

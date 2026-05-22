@@ -141,7 +141,7 @@ def scan_image_for_pii(path: str | Path, require_ocr: bool | None = None) -> Pri
 
     try:
         from PIL import Image  # type: ignore
-    except Exception:
+    except ImportError:
         flags = filename_flags + (["ocr_unavailable"] if require_ocr else [])
         notes.append("Pillow is not installed, so screenshot OCR could not run.")
         if require_ocr:

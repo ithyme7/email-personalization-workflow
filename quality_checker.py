@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from llm_client import LLMClient, LLMError, load_prompt
+from llm_client import LLMClient, LLMError, load_prompt, load_prompt_pair
 from models import EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ToneProfile
 from evidence_extractor import evidence_to_payload
 from copy_guardrails import local_personalization_flags
+from defaults import _default_next_sentence
 
+from string import Template
+import json
+
+
+SYSTEM_TEMPLATE, _USER_TEMPLATE_STR = load_prompt_pair("qc_personalization")
+_USER_TEMPLATE = Template(_USER_TEMPLATE_STR)
 
 BLOCKING_QC_FLAGS = {
     "em_dash",
@@ -36,38 +43,39 @@ def check_quality(
     evidence: EvidenceResult,
     draft: PersonalizationDraft,
     tone_profile: ToneProfile | None = None,
+    temperature: float = 0.4,
+    feedback_context: str = "",
+    research_depth: float = 1.0,
 ) -> QCResult:
-    prompt = load_prompt("qc_personalization.txt")
-    next_sentence = lead.campaign_context.strip() or "We help mobile app teams with this type of work, figure out where users drop off and why."
-    payload = {
-        "company_name": lead.company_name,
-        "website_url": lead.website_url,
-        "recipient_name": lead.recipient_name,
-        "recipient_role": lead.recipient_role,
-        "campaign_context": lead.campaign_context,
-        "linkedin_observation": lead.linkedin_observation,
-        "app_flow_observation": lead.app_flow_observation,
-        "recent_news_note": lead.recent_news_note,
-        "competitor_context": lead.competitor_context,
-        "email_template_context": (
-            "Hey [Name]\n"
-            "{personalized_line}\n"
-            f"{next_sentence}\n"
-            "In a recent app project, session replays showed users bouncing off a paywall because the copy was unclear. "
-            "After the paywall was rewritten, conversion improved materially."
+    next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
+
+    user_text = _USER_TEMPLATE.safe_substitute(
+        company_name=lead.company_name or "",
+        website_url=lead.website_url or "",
+        recipient_name=lead.recipient_name or "",
+        recipient_role=lead.recipient_role or "",
+        campaign_context=lead.campaign_context or "",
+        linkedin_observation=lead.linkedin_observation or "",
+        app_flow_observation=lead.app_flow_observation or "",
+        recent_news_note=lead.recent_news_note or "",
+        competitor_context=lead.competitor_context or "",
+        required_next_sentence=next_sentence,
+        evidence_text=json.dumps(evidence_to_payload(evidence), ensure_ascii=False),
+        draft_opening_line=draft.opening_line or "",
+        draft_tailored_insight=draft.tailored_insight or "",
+        draft_chosen_angle=draft.chosen_angle or "",
+        draft_evidence_used=json.dumps(draft.evidence_used_for_copy, ensure_ascii=False),
+        tone_profile_text=json.dumps(
+            tone_profile.to_prompt_payload() if tone_profile else {},
+            ensure_ascii=False,
         ),
-        "evidence": evidence_to_payload(evidence),
-        "draft": {
-            "opening_line": draft.opening_line,
-            "tailored_insight": draft.tailored_insight,
-            "chosen_angle": draft.chosen_angle,
-            "evidence_used_for_copy": draft.evidence_used_for_copy,
-        },
-        "tone_profile": tone_profile.to_prompt_payload() if tone_profile else {},
-    }
+        feedback_context=feedback_context,
+        research_depth=research_depth,
+    )
+
     local_flags = _local_flags(draft, evidence, lead)
     try:
-        raw = client.complete_json(prompt, payload)
+        raw = client.complete_json(SYSTEM_TEMPLATE, user_text, temperature=temperature)
     except LLMError as exc:
         return QCResult(
             score=0,
@@ -92,6 +100,8 @@ def check_quality(
         score=max(0, min(10, score)),
         passed=passed,
         reasons=[str(reason) for reason in raw.get("reasons", []) if str(reason).strip()],
-        suggested_rewrite=raw.get("suggested_rewrite", {}) if isinstance(raw.get("suggested_rewrite", {}), dict) else {},
+        suggested_rewrite=raw.get("suggested_rewrite", {})
+        if isinstance(raw.get("suggested_rewrite", {}), dict)
+        else {},
         quality_flags=flags,
     )

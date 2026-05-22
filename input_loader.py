@@ -1,12 +1,90 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 import pandas as pd
 
 from models import LeadInput
+
+
+def _compute_research_depth(lead: LeadInput) -> float:
+    """Bereken een research-depth score (0.0–1.0) op basis van lead-kwaliteit.
+
+    Signalen die zwaarder wegen:
+      - Bedrijfsgrootte / funding indicaties
+      - LinkedIn profiel beschikbaar
+      - App Store presence
+      - Specifieke campaign context
+      - Concurrentie/competitor context
+    """
+    score = 0.3  # baseline
+
+    # LinkedIn data
+    if lead.linkedin_url.strip():
+        score += 0.1
+    if lead.linkedin_observation.strip():
+        score += 0.075
+    if lead.recipient_role.strip():
+        score += 0.05
+
+    # App Store / product signals
+    if lead.app_store_url.strip():
+        score += 0.075
+    if lead.app_flow_observation.strip():
+        score += 0.05
+
+    # Campaign context diepgang
+    ctx = lead.campaign_context.strip().lower()
+    if ctx:
+        # Specifieke context is waardevoller dan generiek
+        generic_phrases = {
+            " " + w
+            for w in (
+                "outreach",
+                "email",
+                "cold email",
+                "personalization",
+                "prospect",
+                "lead",
+                "contact",
+                "follow up",
+                "follow-up",
+            )
+        }
+        has_specific = not any(ctx.endswith(p) or p in ctx for p in generic_phrases)
+        score += 0.1 if has_specific else 0.04
+
+    # Competitor context
+    if lead.competitor_context.strip():
+        score += 0.075
+
+    # Optional notes als extra signaal
+    if lead.optional_notes.strip():
+        score += 0.05
+
+    # Funding/enterprise indicatoren in company naam of notes
+    combined = (lead.company_name + " " + lead.optional_notes + " " + lead.campaign_context).lower()
+    enterprise_markers = {
+        "enterprise",
+        "series a",
+        "series b",
+        "series c",
+        "series d",
+        "seed round",
+        "funding",
+        "raised",
+        "fortune",
+        "inc 5000",
+        "unicorn",
+        "b2b",
+    }
+    if any(m in combined for m in enterprise_markers):
+        score += 0.1
+
+    return min(1.0, max(0.0, round(score, 2)))
 
 
 REQUIRED_COLUMNS = ["company_name", "website_url"]
@@ -203,8 +281,13 @@ def load_leads(
             original_columns=_row_original_columns(original_row),
         )
 
+        # Bereken research depth score voor lead-weighted research
+        lead.research_depth = _compute_research_depth(lead)
+
         if lead.is_valid and deduplicate:
-            key = dedupe_key(lead)
+            parsed = urlparse(lead.website_url)
+            domain = parsed.netloc.lower().removeprefix("www.")
+            key = f"site:{domain}" if domain else f"name:{lead.company_name.strip().lower()}"
             if key in seen:
                 lead.is_valid = False
                 lead.is_duplicate = True

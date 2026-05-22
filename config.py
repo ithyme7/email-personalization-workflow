@@ -63,11 +63,21 @@ class Settings:
     max_llm_calls_per_batch: int
     max_workers: int
     personalization_options: int = 3
+    max_refinement_iterations: int = 3
     research_region: str = "us"
     app_store_country: str = "us"
     browser_locale: str = "en-US"
     browser_timezone: str = "America/New_York"
     max_requests_per_minute: int = 30
+    # --- Follow-up sequence ---
+    follow_up_sequence_enabled: bool = False
+    follow_up_max_steps: int = 4
+    follow_up_min_quality_score: float = 6.0
+    # --- A/B Testing ---
+    ab_testing_enabled: bool = False
+    # --- Send-time Optimization ---
+    send_time_optimization_enabled: bool = False
+    send_time_optimization_hours_ahead: int = 24
 
     @property
     def has_openai_key(self) -> bool:
@@ -95,6 +105,11 @@ class Settings:
             return self.has_deepseek_key
         return self.has_openai_key
 
+    @property
+    def cache_ttl_seconds(self) -> int:
+        """TTL voor LLM-response cache in seconden (default: 24 uur)."""
+        return _int_env("CACHE_TTL_SECONDS", 86400)
+
 
 def _int_env(name: str, default: int) -> int:
     try:
@@ -108,6 +123,11 @@ def _float_env(name: str, default: float) -> float:
         return float(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name, str(default)).strip().lower()
+    return value in ("1", "true", "yes", "on")
 
 
 def load_settings() -> Settings:
@@ -150,11 +170,18 @@ def load_settings() -> Settings:
         max_llm_calls_per_batch=max(0, _int_env("MAX_LLM_CALLS_PER_BATCH", 0)),
         max_workers=max(1, _int_env("MAX_WORKERS", 4)),
         personalization_options=max(1, min(3, _int_env("PERSONALIZATION_OPTIONS", 2))),
+        max_refinement_iterations=max(1, _int_env("MAX_REFINEMENT_ITERATIONS", 3)),
         max_requests_per_minute=max(1, _int_env("MAX_REQUESTS_PER_MINUTE", 30)),
         research_region=region,
         app_store_country=app_store_country,
         browser_locale=browser_locale,
         browser_timezone=browser_timezone,
+        follow_up_sequence_enabled=_bool_env("FOLLOW_UP_SEQUENCE_ENABLED", False),
+        follow_up_max_steps=max(1, _int_env("FOLLOW_UP_MAX_STEPS", 4)),
+        follow_up_min_quality_score=float(os.getenv("FOLLOW_UP_MIN_QUALITY_SCORE", "6.0").strip() or "6.0"),
+        ab_testing_enabled=_bool_env("AB_TESTING_ENABLED", False),
+        send_time_optimization_enabled=_bool_env("SEND_TIME_OPTIMIZATION_ENABLED", False),
+        send_time_optimization_hours_ahead=max(1, _int_env("SEND_TIME_OPTIMIZATION_HOURS_AHEAD", 24)),
     )
 
 

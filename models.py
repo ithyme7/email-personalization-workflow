@@ -36,7 +36,8 @@ OUTPUT_COLUMNS = [
     "screenshot_url",
     "recent_news_url",
     "recent_news_note",
-    "competitor_context",
+"competitor_context",
+    "research_depth",
     "friction_checklist",
     "app_check_status",
     "recommended_manual_check",
@@ -183,8 +184,30 @@ OUTPUT_COLUMNS = [
     "send_confidence",
     "quality_flags",
     "source_urls",
-    "needs_manual_review",
+"needs_manual_review",
     "reviewer_notes",
+    # --- Sequence columns ---
+    "sequence_step",
+    "follow_up_type",
+    "sequence_opening_line",
+    "sequence_body_text",
+    "sequence_cta_text",
+    "sequence_chosen_angle",
+    "sequence_evidence_used",
+    "sequence_quality_score",
+    "sequence_quality_flags",
+    "sequence_needs_review",
+    # --- A/B Test columns ---
+    "ab_experiment_id",
+    "ab_variant_id",
+    "ab_variant_label",
+    "ab_testing_enabled",
+    # --- Send-time Optimization columns ---
+    "suggested_send_time_utc",
+    "suggested_send_timezone",
+    "send_time_confidence",
+    "send_time_source",
+    "send_time_reasoning",
 ]
 
 
@@ -210,6 +233,7 @@ class LeadInput:
     validation_errors: list[str] = field(default_factory=list)
     is_duplicate: bool = False
     original_columns: dict[str, str] = field(default_factory=dict)
+    research_depth: float = 1.0
 
 
 @dataclass

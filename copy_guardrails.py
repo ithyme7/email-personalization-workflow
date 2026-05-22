@@ -64,29 +64,35 @@ DOWNLOAD_PATTERNS = (
 )
 
 
-def _brand_candidates(lead: LeadInput | None) -> list[str]:
+def _brand_casing_map(lead: LeadInput | None) -> list[tuple[str, str]]:
+    """Return list of (lowercase_brand, replacement) sorted longest first.
+
+    Outbound copy uses lowercase brand mentions by default because that reads
+    more natural in the client's cold email template.
+    """
     if lead is None:
         return []
-    candidates: list[str] = []
+    mapping: dict[str, str] = {}
     if lead.company_name:
-        candidates.append(lead.company_name)
+        clean = re.sub(r"\s+", " ", str(lead.company_name).strip())
+        if len(clean) >= 3 and clean.lower() not in {"app", "www", "com", "the"}:
+            mapping[clean.lower()] = clean.lower()
     parsed = urlparse(lead.website_url or "")
     host = parsed.netloc.replace("www.", "")
     if host:
-        candidates.append(host.split(".")[0])
-    cleaned: list[str] = []
-    for candidate in candidates:
-        value = re.sub(r"\s+", " ", str(candidate or "").strip())
-        if len(value) >= 3 and value.lower() not in {"app", "www", "com", "the"}:
-            cleaned.append(value)
-    return sorted(dict.fromkeys(cleaned), key=len, reverse=True)
+        host_clean = host.split(".")[0]
+        if len(host_clean) >= 3 and host_clean.lower() not in {"app", "www", "com", "the"}:
+            if host_clean.lower() not in mapping:
+                mapping[host_clean.lower()] = host_clean.lower()
+    # Sort longest first so longer brand names are matched before substrings
+    return sorted(mapping.items(), key=lambda pair: len(pair[0]), reverse=True)
 
 
 def _replace_brand_casing(text: str, lead: LeadInput | None) -> str:
     result = str(text or "")
-    for candidate in _brand_candidates(lead):
-        pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(candidate)}(?![A-Za-z0-9])", re.IGNORECASE)
-        result = pattern.sub(candidate.lower(), result)
+    for lower, preferred in _brand_casing_map(lead):
+        pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(lower)}(?![A-Za-z0-9])", re.IGNORECASE)
+        result = pattern.sub(preferred, result)
     return result
 
 
@@ -175,8 +181,8 @@ def _has_download_claim(text: str) -> bool:
 
 
 def _has_non_lowercase_brand(text: str, lead: LeadInput | None) -> bool:
-    for candidate in _brand_candidates(lead):
-        pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(candidate)}(?![A-Za-z0-9])", re.IGNORECASE)
+    for lower, preferred in _brand_casing_map(lead):
+        pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(lower)}(?![A-Za-z0-9])", re.IGNORECASE)
         for match in pattern.finditer(text or ""):
             if match.group(0) != match.group(0).lower():
                 return True

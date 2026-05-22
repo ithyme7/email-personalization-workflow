@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,19 +9,35 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from ab_testing import (
+    ExperimentAssignment,
+    assign_lead_to_variant,
+    get_experiment,
+    record_experiment_result,
+)
 from angle_selector import evidence_for_selected_angle, select_angle
 from checkpoint import cleanup_checkpoint, load_checkpoint, save_checkpoint
 from config import Settings, ensure_directories, load_settings
+from copy_guardrails import soften_draft_for_weak_evidence
 from deep_research import collect_deep_research
+from defaults import _default_next_sentence
 from email_verification import verify_lead_email
 from evidence_extractor import evidence_to_payload, extract_evidence
 from export import export_client_batch_rows, export_delivery_rows, export_rows, export_sending_tool_rows
-from input_loader import dedupe_key, load_leads
+from feedback import init_feedback_db, store_generated_emails
+from input_loader import load_leads
 from lead_quality import LeadQualityContext, build_lead_quality_context, evaluate_lead_quality
 from llm_client import LLMClient
 from mismatch_detection import apply_mismatch_to_row
-from models import EvidenceFact, EvidenceResult, LeadInput, PersonalizationDraft, QCResult, ResearchResult, join_list
-from copy_guardrails import soften_draft_for_weak_evidence
+from models import (
+    EvidenceFact,
+    EvidenceResult,
+    LeadInput,
+    PersonalizationDraft,
+    QCResult,
+    ResearchResult,
+    join_list,
+)
 from personalization_writer import write_personalization
 from preflight import has_blocking_failures, preflight_summary, run_preflight
 from prompt_versions import prompt_hashes, tone_profile_hash
@@ -29,6 +46,9 @@ from rate_limiter import RateLimiter
 from research_tasks import recommended_research_context, run_research_tasks
 from run_history import append_generated_email_rows
 from sales_principles import SalesPrinciplesResult, evaluate_sales_principles
+from sequence_engine import generate_sequence, sequence_result_to_rows
+from send_time_optimizer import compute_send_time, format_send_time
+from impact_analyzer import build_feedback_context
 from schemas import stable_hash
 from sendability import evaluate_sendability
 from surface_classifier import classify_surface, is_app_first, research_priority_for
@@ -81,8 +101,8 @@ def _emit_progress(progress_callback: ProgressCallback | None, **payload: Any) -
         return
     try:
         progress_callback(payload)
-    except Exception:
-        logging.debug("Progress callback failed", exc_info=True)
+    except Exception as exc:
+        logging.debug("Progress callback failed: %s", exc)
 
 
 def _base_row(lead: LeadInput, lead_quality_context: LeadQualityContext | None = None) -> dict[str, Any]:
@@ -106,6 +126,7 @@ def _base_row(lead: LeadInput, lead_quality_context: LeadQualityContext | None =
         "recent_news_url": lead.recent_news_url,
         "recent_news_note": lead.recent_news_note,
         "competitor_context": lead.competitor_context,
+        "research_depth": lead.research_depth,
         "friction_checklist": "",
         "app_check_status": "",
         "recommended_manual_check": "",
@@ -275,7 +296,7 @@ def _template_preview(lead: LeadInput, opening_line: str) -> str:
     line = str(opening_line or "").strip()
     if not line or line.startswith("["):
         return ""
-    next_sentence = lead.campaign_context.strip() or PITCH_SENTENCE
+    next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
     return f"Hey {_first_name(lead.recipient_name)}\n\n{line}\n\n{next_sentence}"
 
 
@@ -501,6 +522,12 @@ def _offline_research_row(
             ),
         }
     )
+    # A/B experiment: store assignment metadata
+    if ab_assignment:
+        row["ab_experiment_id"] = ab_assignment.experiment_id
+        row["ab_variant_id"] = ab_assignment.variant_id
+        row["ab_variant_label"] = ab_assignment.variant_label
+
     app_check_status, manual_check = _manual_check_recommendation(lead, row, research)
     row["app_check_status"] = app_check_status
     row["recommended_manual_check"] = manual_check
@@ -613,14 +640,20 @@ def _evidence_strength_score(evidence: EvidenceResult) -> int:
     return max(1, min(5, score)) if evidence.facts else 0
 
 
-def _variant_evidence(evidence: EvidenceResult, fact: EvidenceFact, allowed_facts: list[EvidenceFact]) -> EvidenceResult:
+def _variant_evidence(
+    evidence: EvidenceResult,
+    fact: EvidenceFact,
+    allowed_facts: list[EvidenceFact],
+    excluded_friction_types: set[str] | None = None,
+) -> EvidenceResult:
+    excluded = excluded_friction_types or set()
     supporting_facts = [
         candidate
         for candidate in allowed_facts
         if candidate is not fact
+        and candidate.friction_type not in excluded
         and (
-            candidate.friction_type == fact.friction_type
-            or candidate.conversion_outcome == fact.conversion_outcome
+            candidate.conversion_outcome == fact.conversion_outcome
             or candidate.surface_checked == fact.surface_checked
         )
     ]
@@ -646,35 +679,91 @@ def _write_and_qc_variant(
     variant_index: int,
     avoid_opening_lines: list[str],
     variant_instruction: str,
+    max_iterations: int = 3,
+    feedback_context: str = "",
+    research_depth: float = 1.0,
+    ab_variant_label: str = "",
 ) -> tuple[PersonalizationDraft, QCResult]:
-    draft = write_personalization(
-        client,
-        lead,
-        evidence,
-        tone_profile,
-        variant_index=variant_index,
-        avoid_opening_lines=avoid_opening_lines,
-        variant_instruction=variant_instruction,
-    )
-    draft = soften_draft_for_weak_evidence(draft, evidence)
-    qc = check_quality(client, lead, evidence, draft, tone_profile)
-    if not qc.passed:
-        rewrite_reasons = qc.reasons + qc.quality_flags
-        rewritten = write_personalization(
+    """Generate + QC a personalization variant with iterative refinement.
+
+    Each iteration:
+      1. Generate draft at decreasing temperature (0.6 -> 0.4)
+      2. Run quality check
+      3. If QC fails, feed suggested_rewrite back as starting point
+      4. Track best result across all iterations
+      5. Early exit on score >= 8 with no blocking flags
+    """
+    best_draft: PersonalizationDraft | None = None
+    best_qc: QCResult | None = None
+    last_qc_suggested_rewrite: dict[str, str] = {}
+    used_opening_lines: list[str] = list(avoid_opening_lines)
+    previous_failure_reasons: list[str] = []
+
+    for iteration in range(max_iterations):
+        # Temperature decay: 0.6, 0.55, 0.5, ... floor at 0.4
+        temperature = max(0.4, 0.6 - 0.05 * iteration)
+        qc_temperature = max(0.3, 0.4 - 0.05 * iteration)
+
+        draft = write_personalization(
             client,
             lead,
             evidence,
             tone_profile,
-            previous_failure_reasons=rewrite_reasons,
+            previous_failure_reasons=previous_failure_reasons if iteration > 0 else None,
             variant_index=variant_index,
-            avoid_opening_lines=avoid_opening_lines + [draft.opening_line],
+            avoid_opening_lines=used_opening_lines,
             variant_instruction=variant_instruction,
+            qc_suggested_rewrite=last_qc_suggested_rewrite if iteration > 0 else None,
+            temperature=temperature,
+            feedback_context=feedback_context,
+            research_depth=research_depth,
+            ab_variant_label=ab_variant_label,
         )
-        rewritten = soften_draft_for_weak_evidence(rewritten, evidence)
-        rewritten_qc = check_quality(client, lead, evidence, rewritten, tone_profile)
-        if rewritten_qc.score >= qc.score:
-            return rewritten, rewritten_qc
-    return draft, qc
+        draft = soften_draft_for_weak_evidence(draft, evidence)
+        qc = check_quality(
+            client, lead, evidence, draft, tone_profile,
+            temperature=qc_temperature,
+            feedback_context=feedback_context,
+            research_depth=research_depth,
+        )
+
+        logging.info(
+            "Variant %d iteration %d/%d: score=%d passed=%s flags=%s temp=%.2f",
+            variant_index,
+            iteration + 1,
+            max_iterations,
+            qc.score,
+            qc.passed,
+            qc.quality_flags,
+            temperature,
+        )
+
+        # Track best result seen so far (prefer passing > higher score > newer)
+        if best_qc is None or qc.passed and not best_qc.passed or (
+            qc.score > best_qc.score and qc.passed == best_qc.passed
+        ):
+            best_draft = draft
+            best_qc = qc
+
+        # Early exit: strong pass, no need to refine further
+        if qc.passed and qc.score >= 8:
+            break
+
+        # Prepare feedback for next iteration
+        previous_failure_reasons = qc.reasons + qc.quality_flags
+        if qc.suggested_rewrite:
+            last_qc_suggested_rewrite = qc.suggested_rewrite
+        used_opening_lines.append(draft.opening_line)
+
+    assert best_draft is not None and best_qc is not None
+    if not best_qc.passed:
+        logging.info(
+            "Variant %d: best score after %d iteration(s) was %d (did not pass)",
+            variant_index,
+            max_iterations,
+            best_qc.score,
+        )
+    return best_draft, best_qc
 
 
 def _sales_for_variant(
@@ -858,6 +947,8 @@ def _process_valid_lead(
     deep_research_enabled: bool,
     tone_profile_name: str,
     lead_quality_context: LeadQualityContext | None = None,
+    feedback_context: str = "",
+    ab_assignment: ExperimentAssignment | None = None,
 ) -> dict[str, Any]:
     row = _base_row(lead, lead_quality_context)
     row = _apply_mismatch_flags(row)
@@ -877,9 +968,14 @@ def _process_valid_lead(
         row["recommended_manual_check"] = manual_check
         return row
 
-    research = research_company(lead, client.settings)
+    # Lead-weighted research: schaal research-inspanning op basis van research_depth
+    max_pages = max(1, round(lead.research_depth * client.settings.max_pages_per_company))
+    research = research_company(lead, client.settings, max_pages=max_pages)
+
+    # Deep research alleen voor leads met voldoende depth
     deep_research = None
-    if deep_research_enabled:
+    effective_deep_research = deep_research_enabled and lead.research_depth >= 0.6
+    if effective_deep_research:
         deep_research = collect_deep_research(lead, client.settings)
         deep_prompt_text = deep_research.to_prompt_text()
         if deep_prompt_text:
@@ -1005,13 +1101,26 @@ def _process_valid_lead(
         variant_facts.append(variant_facts[-1])
     variants: list[dict[str, Any]] = []
     avoid_opening_lines: list[str] = []
-    variant_instructions = [
+    # Build variant instructions, enriched with A/B context if assigned
+    base_instructions = [
         "Option 1: choose the strongest sendable friction angle.",
         "Option 2: choose a meaningfully different angle if evidence allows, ideally user feedback, app-store review, onboarding, or conversion friction.",
         "Option 3: choose another distinct angle if evidence allows, ideally proof, positioning, CTA, website, or visual friction.",
     ]
+    if ab_assignment:
+        base_instructions = [
+            f"{instr} [A/B Experiment: {ab_assignment.experiment_id}, assigned variant: \"{ab_assignment.variant_label}\" ({ab_assignment.variant_id})]"
+            for instr in base_instructions
+        ]
+
     for variant_index, fact in enumerate(variant_facts[: client.settings.personalization_options], 1):
-        variant_evidence = _variant_evidence(evidence, fact, selection.allowed_facts)
+        # Forceer evidence diversiteit: sluit friction types uit die al gebruikt zijn
+        excluded = frozenset(
+            item["draft"].chosen_angle.split(":")[0].strip()
+            for item in variants
+            if item["draft"].chosen_angle and ":" in item["draft"].chosen_angle
+        )
+        variant_evidence = _variant_evidence(evidence, fact, selection.allowed_facts, excluded_friction_types=excluded)
         draft, qc = _write_and_qc_variant(
             client,
             lead,
@@ -1019,7 +1128,11 @@ def _process_valid_lead(
             tone_profile,
             variant_index,
             avoid_opening_lines,
-            variant_instructions[min(variant_index - 1, len(variant_instructions) - 1)],
+            base_instructions[min(variant_index - 1, len(base_instructions) - 1)],
+            max_iterations=client.settings.max_refinement_iterations,
+            feedback_context=feedback_context,
+            research_depth=lead.research_depth,
+            ab_variant_label=ab_assignment.variant_label if ab_assignment else "",
         )
         variant_flags = set(selection.quality_flags).union(qc.quality_flags)
         variant_needs_review = (
@@ -1121,6 +1234,13 @@ def _process_valid_lead(
     if not row.get("recommended_opener"):
         row["needs_manual_review"] = True
         row["quality_flags"] = join_list([row.get("quality_flags", ""), "no_sendable_option"])
+
+    # A/B experiment: store assignment metadata
+    if ab_assignment:
+        row["ab_experiment_id"] = ab_assignment.experiment_id
+        row["ab_variant_id"] = ab_assignment.variant_id
+        row["ab_variant_label"] = ab_assignment.variant_label
+
     app_check_status, manual_check = _manual_check_recommendation(lead, row, research)
     row["app_check_status"] = app_check_status
     row["recommended_manual_check"] = manual_check
@@ -1138,11 +1258,28 @@ def _process_single_lead(
     ai_available: bool = True,
     ai_unavailable_note: str = "",
     rate_limiter: RateLimiter | None = None,
+    feedback_context: str = "",
 ) -> dict[str, Any]:
     """Worker-functie: verwerk één lead met een eigen LLMClient (thread-safe)."""
     client = LLMClient(settings, rate_limiter=rate_limiter)
 
     lead_label = lead.company_name or lead.website_url or "unnamed row"
+
+    # A/B experiment assignment (deterministic per lead)
+    ab_assignment: ExperimentAssignment | None = None
+    if settings.ab_testing_enabled:
+        # Determine experiment ID from args or config
+        experiment_id = getattr(args, "ab_experiment_id", None) or os.getenv("AB_EXPERIMENT_ID", "default")
+        # Check experiment is registered
+        exp = get_experiment(experiment_id)
+        if exp and exp.enabled:
+            ab_assignment = assign_lead_to_variant(
+                experiment_id=experiment_id,
+                lead_id=f"row_{lead.row_id}" if hasattr(lead, "row_id") else lead.company_name,
+                variants=exp.variants,
+                strategy=exp.allocation_strategy,
+                fixed_weights=exp.fixed_weights,
+            )
 
     if not lead.is_valid:
         row = _attach_run_metadata(
@@ -1169,6 +1306,8 @@ def _process_single_lead(
             args.deep_research,
             tone_profile_name,
             lead_quality_context,
+            feedback_context=feedback_context,
+            ab_assignment=ab_assignment,
         )
         row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
         return _row_to_dict(row, lead_label, "complete")
@@ -1257,6 +1396,12 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
 
     logging.info("Parallel batch: %d leads, %d workers", total, max_workers)
 
+    # ---- Feedback-context: historische sends ophalen ----
+    init_feedback_db()
+    fb_context = build_feedback_context()
+    if fb_context:
+        logging.info("Feedback context loaded from previous sends.")
+
     # ---- Checkpoint: laad reeds verwerkte resultaten ----
     existing_checkpoint = load_checkpoint(args.output)
     if existing_checkpoint:
@@ -1286,6 +1431,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
                 ai_available,
                 ai_unavailable_note,
                 rate_limiter,
+                fb_context,
             )
             futures[future] = index
 
@@ -1373,6 +1519,89 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         logging.info("Exported %s sending-tool rows to %s", sending_preset, sending_output)
 
     logging.info("Exported %s rows to %s", len(rows), args.output)
+
+    # ---- Follow-up sequences genereren ----
+    if settings.follow_up_sequence_enabled:
+        sequence_rows = []
+        for row in rows:
+            if row.get("send_confidence") == "send" and row.get("research_depth", 0.0) >= 0.6:
+                lead = next((l for l in leads if l.company_name == row.get("company_name")), None)
+                if lead:
+                    draft = PersonalizationDraft(
+                        opening_line=row.get("opening_line", ""),
+                        tailored_insight=row.get("tailored_insight", ""),
+                        chosen_angle=row.get("chosen_angle", ""),
+                        evidence_used_for_copy=[row.get("evidence_used_for_copy")],
+                    )
+                    all_evidence = [
+                        row.get("evidence_points", ""),
+                        row.get("tailored_insight", ""),
+                        row.get("chosen_angle", ""),
+                    ]
+                    tone = load_tone_profile(str(getattr(args, "tone_profile", settings.tone_profile)))
+                    seq_result = generate_sequence(
+                        client=master_client,
+                        lead=lead,
+                        original_draft=draft,
+                        tone_profile=tone,
+                        all_evidence_texts=[e for e in all_evidence if e],
+                        feedback_context=fb_context,
+                        max_steps=settings.follow_up_max_steps,
+                    )
+                    sequence_rows.extend(sequence_result_to_rows(seq_result, row))
+        if sequence_rows:
+            for i, srow in enumerate(sequence_rows):
+                srow["run_id"] = run_id
+                srow["row_id"] = f"{len(rows) + i + 1}"
+                srow["example_id"] = stable_hash(run_id, srow["row_id"], srow.get("company_name", ""), srow.get("recipient_name", ""), srow.get("sequence_opening_line", ""))
+                srow.update(prompt_meta)
+                srow["tone_profile_hash"] = tone_hash
+            rows.extend(sequence_rows)
+            logging.info("Generated %d follow-up sequence rows", len(sequence_rows))
+
+    # ---- Send-time optimization ----
+    if settings.send_time_optimization_enabled:
+        logging.info("Computing optimal send times for %d leads...", len(rows))
+        for row in rows:
+            lead_match = next((l for l in leads if l.company_name == row.get("company_name")), None)
+            if lead_match:
+                advice = compute_send_time(lead_match, days_ahead=0)
+                row["suggested_send_time_utc"] = advice.send_at_utc.isoformat()
+                row["suggested_send_timezone"] = advice.timezone_label
+                row["send_time_confidence"] = advice.confidence
+                row["send_time_source"] = advice.source
+                row["send_time_reasoning"] = advice.reasoning
+            else:
+                row["suggested_send_time_utc"] = ""
+                row["suggested_send_timezone"] = ""
+                row["send_time_confidence"] = 0.0
+                row["send_time_source"] = ""
+                row["send_time_reasoning"] = "No matching lead for timezone detection"
+        logging.info("Send-time optimization complete.")
+    # ---- Store A/B experiment results ----
+    if settings.ab_testing_enabled:
+        for row in rows:
+            ab_exp_id = row.get("ab_experiment_id")
+            ab_var_id = row.get("ab_variant_id")
+            ab_var_label = row.get("ab_variant_label")
+            if ab_exp_id and ab_var_id:
+                record_experiment_result(
+                    experiment_id=ab_exp_id,
+                    variant_id=ab_var_id,
+                    lead_id=str(row.get("row_id", "")),
+                    was_opened=bool(row.get("was_opened", False)),
+                    got_reply=bool(row.get("got_reply", False)),
+                    converted=bool(row.get("converted", False)),
+                )
+                logging.info(
+                    "A/B result stored: exp=%s variant=%s lead=%s converted=%s",
+                    ab_exp_id, ab_var_id, row.get("row_id", ""), row.get("converted", ""),
+                )
+
+    feedback_stored = store_generated_emails(rows)
+    if feedback_stored:
+        logging.info("Stored %d generated emails in feedback database for future learning.", feedback_stored)
+
     _emit_progress(
         progress_callback,
         event="complete",
