@@ -42,6 +42,7 @@ def check_quality(
     draft: PersonalizationDraft,
     tone_profile: ToneProfile | None = None,
     temperature: float = 0.4,
+    feedback_context: str = "",
 ) -> QCResult:
     next_sentence = lead.campaign_context.strip() or _default_next_sentence(lead)
 
@@ -65,6 +66,7 @@ def check_quality(
             tone_profile.to_prompt_payload() if tone_profile else {},
             ensure_ascii=False,
         ),
+        feedback_context=feedback_context,
     )
 
     local_flags = _local_flags(draft, evidence, lead)

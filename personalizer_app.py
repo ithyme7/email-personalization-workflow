@@ -1,114 +1,3 @@
-from __future__ import annotations
-
-import argparse
-import logging
-import os
-import sys
-from datetime import datetime
-from pathlib import Path
-
-from batch_runner import run
-from config import load_settings
-from tone_profiles import available_tone_profiles
-
-
-DEFAULT_CONTEXT = "We help mobile app teams with this type of work, figure out where users drop off and why."
-
-
-def _ask_path(prompt: str, default: str = "") -> str:
-    suffix = f" [{default}]" if default else ""
-    value = input(f"{prompt}{suffix}: ").strip().strip('"')
-    return value or default
-
-
-def _ask_yes_no(prompt: str, default: bool = True) -> bool:
-    suffix = "Y/n" if default else "y/N"
-    value = input(f"{prompt} [{suffix}]: ").strip().lower()
-    if not value:
-        return default
-    return value in {"y", "yes", "j", "ja"}
-
-
-def _pick_csv_file() -> str:
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception:
-        return ""
-
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    path = filedialog.askopenfilename(
-        title="Choose lead CSV",
-        filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-    )
-    root.destroy()
-    return path or ""
-
-
-def _resolve_input_path(default_input: str = "") -> str:
-    print("Stap 1 - kies je input CSV")
-    print("Druk op Enter om een bestand te kiezen, of plak direct een pad.")
-    while True:
-        typed = _ask_path("CSV input path", default_input)
-        input_path = typed
-        if not input_path:
-            input_path = _pick_csv_file()
-        if input_path and Path(input_path).exists():
-            return input_path
-        print("Ik kan dat CSV-bestand niet vinden. Probeer opnieuw.")
-        default_input = ""
-
-
-def _default_output_path(input_path: str) -> str:
-    source = Path(input_path)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M")
-    return str(source.with_name(f"{source.stem}_personalization_review_{stamp}.xlsx"))
-
-
-def _resolve_output_path(input_path: str) -> str:
-    print("")
-    print("Stap 2 - kies waar de Excel-output moet komen")
-    default_output = _default_output_path(input_path)
-    output_path = _ask_path("Output Excel/CSV path", default_output)
-    output = Path(output_path)
-    if output.suffix.lower() not in {".xlsx", ".csv"}:
-        output = output.with_suffix(".xlsx")
-    return str(output)
-
-
-def _maybe_prompt_for_api_key(settings):
-    if settings.has_active_llm_key:
-        return settings
-    if settings.llm_provider != "gemini":
-        return settings
-
-    print("Wil je nu je Gemini API key plakken?")
-    print("Hij wordt alleen voor deze run gebruikt en niet opgeslagen in de code.")
-    print("Let op: plak deze key alleen in je eigen lokale venster, niet in screenshots of chats.")
-    key = input("Gemini API key, leeg laten = research-only: ").strip()
-    if not key:
-        return settings
-    os.environ["GEMINI_API_KEY"] = key
-    print("Gemini key geladen voor deze run.")
-    return load_settings()
-
-
-def _make_args(input_path: str, output_path: str, campaign_context: str, tone_profile: str) -> argparse.Namespace:
-    return argparse.Namespace(
-        input=input_path,
-        output=output_path,
-        campaign_context=campaign_context,
-        manual_review_mode=True,
-        reuse_duplicate_personalization=True,
-        client_batch_output=True,
-        deep_research=True,
-        tone_profile=tone_profile,
-        log_level="INFO",
-    )
-
-
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", stream=sys.stdout)
     print("")
@@ -139,6 +28,24 @@ def main() -> None:
             print("")
             print("API key detected. Full AI evidence/writing/QC flow will run.")
             print("")
+
+    # ---- Hoofdmenu ----
+    print("Kies een optie:")
+    print("  [1] Nieuwe personalisatie-run starten")
+    print("  [2] Feedback invoeren (open/reply/conversion resultaten)")
+    print("  [3] Feedback dashboard bekijken")
+    choice = input("Optie [1/2/3]: ").strip()
+
+    if choice == "2":
+        _feed_back_results()
+        return
+    elif choice == "3":
+        _show_feedback_dashboard()
+        return
+    # Standaard: run 1 (nieuwe personalisatie)
+
+    from feedback import init_feedback_db
+    init_feedback_db()
 
     default_input = str(Path("data/input/sample_companies.csv").resolve())
     if not Path(default_input).exists():
@@ -195,5 +102,240 @@ def main() -> None:
         pass
 
 
-if __name__ == "__main__":
-    main()
+def _feed_back_results() -> None:
+    """Interactieve feedback-invoer: voer open/reply/conversion resultaten in."""
+    from feedback import (
+        SendFeedback,
+        load_feedback,
+        get_feedback_summary,
+        ingest_feedback_results,
+    )
+
+    print("")
+    print("=== Feedback Invoer ===")
+    print("Voer de daadwerkelijke resultaten in voor verstuurde emails.")
+    print("")
+
+    run_id = input("Run-ID (leeg = laatste run): ").strip()
+
+    # Bepaal run_id als niet opgegeven
+    if not run_id:
+        feedback_rows = load_feedback()
+        if feedback_rows:
+            run_id = feedback_rows[0].run_id
+            print(f"Gebruik run: {run_id}")
+        else:
+            print("Geen feedback records gevonden. Voer eerst een run uit.")
+            input("Press Enter to close...")
+            return
+
+    # Toon beschikbare records die nog geen feedback hebben
+    all_feedback = load_feedback(run_id)
+    pending = [fb for fb in all_feedback if not fb.was_opened and not fb.got_reply and not fb.converted]
+
+    if not pending:
+        print("Alle records voor deze run hebben al feedback.")
+
+        # Toon samenvatting
+        summary = get_feedback_summary()
+        print("")
+        print("=== Huidige Samenvatting ===")
+        print(f"  Totale sends:    {summary['total_sends']}")
+        print(f"  Open rate:       {summary['open_rate']}%")
+        print(f"  Reply rate:      {summary['reply_rate']}%")
+        print(f"  Conversie rate:  {summary['conversion_rate']}%")
+        print(f"  Avg reply tijd:  {summary['avg_reply_time_minutes']} min")
+        input("Press Enter to close...")
+        return
+
+    print(f"Er zijn {len(pending)} records zonder feedback.")
+    print("")
+
+    # Bulk-invoer via CSV of per-record
+    mode = input("Bulk invoeren via bestand [b] of per record handmatig [h]? [b/h]: ").strip().lower()
+
+    if mode == "b":
+        _feed_back_bulk(run_id, all_feedback)
+    else:
+        _feed_back_interactive(run_id, all_feedback)
+
+
+def _feed_back_interactive(run_id: str, all_feedback) -> None:
+    result_rows: list[dict[str, Any]] = []
+    for fb in all_feedback:
+        print("")
+        print(f"--- {fb.company_name} ({fb.recipient_name}, {fb.recipient_role}) ---")
+        print(f"  Opening line: {fb.opening_line[:80]}...")
+        print(f"  Angle: {fb.chosen_angle}")
+
+        opened = input("  Geopend? [j/n/enter=sla over]: ").strip().lower()
+        if opened == "":
+            continue
+
+        result: dict[str, Any] = {"example_id": fb.example_id}
+        result["was_opened"] = opened in {"j", "yes", "y", "ja"}
+
+        if result["was_opened"]:
+            replied = input("  Reply ontvangen? [j/n/enter=nee]: ").strip().lower()
+            result["got_reply"] = replied in {"j", "yes", "y", "ja"}
+
+            if result["got_reply"]:
+                reply_text = input("  Reply tekst (optioneel, enter=overslaan): ").strip()
+                if reply_text:
+                    result["reply_text"] = reply_text
+
+                try:
+                    minutes = int(input("  Tijd tot reply in minuten (enter=onbekend): ").strip() or "0")
+                    result["time_to_reply_minutes"] = minutes
+                except ValueError:
+                    pass
+
+                converted = input("  Conversie? [j/n/enter=nee]: ").strip().lower()
+                result["converted"] = converted in {"j", "yes", "y", "ja"}
+
+                if result["converted"]:
+                    conv_type = input("  Conversie type (meeting/demo/trial/sale/partnership/enter): ").strip()
+                    result["conversion_type"] = conv_type
+                    notes = input("  Conversie opmerkingen (optioneel): ").strip()
+                    if notes:
+                        result["conversion_notes"] = notes
+
+        result_rows.append(result)
+
+    if result_rows:
+        updated = ingest_feedback_results(run_id, result_rows)
+        print(f"\n{updated} feedback records bijgewerkt.")
+        _show_summary_after_feedback(run_id)
+
+
+def _feed_back_bulk(run_id: str, all_feedback) -> None:
+    """Bulk feedback invoer via een eenvoudig interactief proces."""
+    # Maak een mapping van example_id -> feedback record
+    fb_map = {fb.example_id: fb for fb in all_feedback}
+
+    print("")
+    print("CSV-formaat verwacht (kopieer/plak of typ per regel):")
+    print("  example_id,was_opened,got_reply,converted,conversion_type")
+    print("  was_opened: 0/1, got_reply: 0/1, converted: 0/1")
+    print("  conversion_type: meeting|demo|trial|sale|partnership (optioneel)")
+    print("")
+    print("Voer de feedback-resultaten in (lege regel = klaar):")
+    print("")
+
+    results: list[dict[str, Any]] = []
+    while True:
+        line = input("> ").strip()
+        if not line:
+            break
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 3:
+            print("  Fout: minimaal 3 kolommen nodig (example_id, was_opened, got_reply)")
+            continue
+
+        example_id = parts[0]
+        if example_id not in fb_map:
+            print(f"  Waarschuwing: example_id '{example_id}' niet gevonden, genegeerd.")
+            continue
+
+        try:
+            result: dict[str, Any] = {"example_id": example_id}
+            result["was_opened"] = int(parts[1]) == 1
+            result["got_reply"] = int(parts[2]) == 1
+
+            if len(parts) >= 4:
+                result["converted"] = int(parts[3]) == 1
+            else:
+                result["converted"] = False
+
+            if len(parts) >= 5 and result["converted"]:
+                result["conversion_type"] = parts[4]
+
+            results.append(result)
+        except ValueError:
+            print("  Fout: was_opened, got_reply, converted moeten 0 of 1 zijn.")
+
+    if results:
+        updated = ingest_feedback_results(run_id, results)
+        print(f"\n{updated} feedback records bijgewerkt.")
+        _show_summary_after_feedback(run_id)
+
+
+def _show_summary_after_feedback(run_id: str) -> None:
+    """Toon een korte samenvatting na feedback-invoer."""
+    from feedback import get_feedback_summary
+
+    summary = get_feedback_summary()
+    print("")
+    print("=== Bijgewerkte Samenvatting ===")
+    print(f"  Totale sends:    {summary['total_sends']}")
+    print(f"  Open rate:       {summary['open_rate']}%")
+    print(f"  Reply rate:      {summary['reply_rate']}%")
+    print(f"  Conversie rate:  {summary['conversion_rate']}%")
+    print(f"  Avg reply tijd:  {summary['avg_reply_time_minutes']} min")
+
+    if summary["by_friction_type"]:
+        print("")
+        print("  Per friction type:")
+        for entry in summary["by_friction_type"][:5]:
+            ft = entry.get("friction_type", "onbekend")
+            cr = entry.get("conversion_rate", 0)
+            n = entry.get("total", 0)
+            print(f"    - {ft}: {cr}% conv ({n} sends)")
+
+
+def _show_feedback_dashboard() -> None:
+    """Toon het feedback dashboard."""
+    from feedback import get_feedback_summary, get_success_patterns, get_failing_patterns
+
+    print("")
+    print("=== Feedback Dashboard ===")
+
+    summary = get_feedback_summary()
+    print(f"\n  Totale sends:    {summary['total_sends']}")
+    print(f"  Open rate:       {summary['open_rate']}%")
+    print(f"  Reply rate:      {summary['reply_rate']}%")
+    print(f"  Conversie rate:  {summary['conversion_rate']}%")
+    print(f"  Avg reply tijd:  {summary['avg_reply_time_minutes']} min")
+
+    if summary["total_sends"] == 0:
+        print("\n  Nog geen feedback data beschikbaar.")
+        input("Press Enter to close...")
+        return
+
+    if summary["by_friction_type"]:
+        print("\n  === Per Friction Type ===")
+        for entry in summary["by_friction_type"]:
+            ft = entry.get("friction_type", "onbekend")
+            cr = entry.get("conversion_rate", 0)
+            n = entry.get("total", 0)
+            bar = "█" * int(cr / 5) + "░" * (20 - int(cr / 5))
+            print(f"    {ft:35s} {bar} {cr:5.1f}% ({n} sends)")
+
+    if summary["by_angle_category"]:
+        print("\n  === Per Angle Category ===")
+        for entry in summary["by_angle_category"]:
+            ac = entry.get("angle_category", "onbekend")
+            cr = entry.get("conversion_rate", 0)
+            n = entry.get("total", 0)
+            bar = "█" * int(cr / 5) + "░" * (20 - int(cr / 5))
+            print(f"    {ac:35s} {bar} {cr:5.1f}% ({n} sends)")
+
+    success = get_success_patterns(limit=5)
+    if success:
+        print("\n  === Wat Werkt ===")
+        for p in success:
+            angle = p.get("chosen_angle", "unknown")
+            conv = p.get("conv_rate", 0)
+            n = p.get("times_used", 0)
+            print(f"    + {angle} → {conv}% conv ({n}x)")
+
+    failing = get_failing_patterns(limit=5)
+    if failing:
+        print("\n  === Wat Niet Werkt ===")
+        for p in failing:
+            angle = p.get("chosen_angle", "unknown")
+            n = p.get("times_used", 0)
+            print(f"    - {angle} ({n}x, 0% conv)")
+
+    print("")
+    input("Press Enter to close...")

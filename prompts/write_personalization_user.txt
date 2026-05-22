@@ -42,3 +42,5 @@ Variant-specific instruction: {variant_instruction}
 
 --- TONE PROFILE ---
 {tone_profile_json}
+
+{feedback_context}

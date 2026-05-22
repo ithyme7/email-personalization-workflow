@@ -24,6 +24,8 @@ from prompt_versions import prompt_hashes, tone_profile_hash
 from quality_checker import check_quality
 from rate_limiter import RateLimiter
 from run_history import append_generated_email_rows
+from feedback import SendFeedback, init_feedback_db
+from impact_analyzer import build_feedback_context
 from schemas import stable_hash
 from surface_classifier import classify_surface, is_app_first, research_priority_for
 from tone_profiles import load_tone_profile
@@ -518,6 +520,7 @@ def _write_and_qc_variant(
     avoid_opening_lines: list[str],
     variant_instruction: str,
     max_iterations: int = 3,
+    feedback_context: str = "",
 ) -> tuple[PersonalizationDraft, QCResult]:
     """Generate + QC a personalization variant with iterative refinement.
 
@@ -550,9 +553,12 @@ def _write_and_qc_variant(
             variant_instruction=variant_instruction,
             qc_suggested_rewrite=last_qc_suggested_rewrite if iteration > 0 else None,
             temperature=temperature,
+            feedback_context=feedback_context,
         )
         qc = check_quality(
-            client, lead, evidence, draft, tone_profile, temperature=qc_temperature
+            client, lead, evidence, draft, tone_profile,
+            temperature=qc_temperature,
+            feedback_context=feedback_context,
         )
 
         logging.info(
@@ -634,6 +640,7 @@ def _process_valid_lead(
     manual_review_mode: bool,
     deep_research_enabled: bool,
     tone_profile_name: str,
+    feedback_context: str = "",
 ) -> dict[str, Any]:
     row = _base_row(lead)
 
@@ -783,6 +790,7 @@ def _process_valid_lead(
             avoid_opening_lines,
             variant_instructions[min(variant_index - 1, len(variant_instructions) - 1)],
             max_iterations=client.settings.max_refinement_iterations,
+            feedback_context=feedback_context,
         )
         variant_flags = set(selection.quality_flags).union(qc.quality_flags)
         variant_needs_review = (
@@ -854,6 +862,7 @@ def _process_single_lead(
     prompt_meta: dict[str, str],
     tone_hash: str,
     rate_limiter: RateLimiter | None = None,
+    feedback_context: str = "",
 ) -> dict[str, Any]:
     """Worker-functie: verwerk één lead met een eigen LLMClient (thread-safe)."""
     client = LLMClient(settings, rate_limiter=rate_limiter)
@@ -878,7 +887,10 @@ def _process_single_lead(
         return _row_to_dict(row, lead_label, "offline")
 
     try:
-        row = _process_valid_lead(client, lead, args.manual_review_mode, args.deep_research, tone_profile_name)
+        row = _process_valid_lead(
+            client, lead, args.manual_review_mode, args.deep_research,
+            tone_profile_name, feedback_context=fb_context,
+        )
         row = _attach_run_metadata(row, client, tone_profile_name, prompt_meta, tone_hash)
         return _row_to_dict(row, lead_label, "complete")
     except Exception as exc:
@@ -965,6 +977,12 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
 
     logging.info("Parallel batch: %d leads, %d workers", total, max_workers)
 
+    # ---- Feedback-context: historische sends ophalen ----
+    init_feedback_db()
+    fb_context = build_feedback_context()
+    if fb_context:
+        logging.info("Feedback context loaded from previous sends.")
+
     # ---- Checkpoint: laad reeds verwerkte resultaten ----
     existing_checkpoint = load_checkpoint(args.output)
     if existing_checkpoint:
@@ -991,6 +1009,7 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
                 prompt_meta,
                 tone_hash,
                 rate_limiter,
+                fb_context,
             )
             futures[future] = index
 
@@ -1074,6 +1093,12 @@ def run_batch(args: argparse.Namespace, progress_callback: ProgressCallback | No
         logging.info("Exported %s sending-tool rows to %s", sending_preset, sending_output)
 
     logging.info("Exported %s rows to %s", len(rows), args.output)
+
+    # ---- Feedback: gegenereerde emails opslaan voor toekomstige leerling ----
+    feedback_stored = store_generated_emails(rows)
+    if feedback_stored:
+        logging.info("Stored %d generated emails in feedback database for future learning.", feedback_stored)
+
     _emit_progress(
         progress_callback,
         event="complete",
