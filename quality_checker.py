@@ -65,7 +65,7 @@ def check_quality(
     }
     local_flags = _local_flags(draft, evidence, lead)
     try:
-        raw = client.complete_json(prompt, payload)
+        raw = client.complete_json(prompt, payload, temperature=0.4)
     except LLMError as exc:
         return QCResult(
             score=0,

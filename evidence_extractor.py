@@ -119,7 +119,7 @@ def extract_evidence(
         "tone_profile": tone_profile.to_prompt_payload() if tone_profile else {},
     }
     try:
-        raw = client.complete_json(prompt, payload)
+        raw = client.complete_json(prompt, payload, temperature=0.1)
     except LLMError as exc:
         return EvidenceResult(needs_manual_review=True, reviewer_notes=[str(exc)])
 

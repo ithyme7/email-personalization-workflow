@@ -224,7 +224,7 @@ class LLMClient:
 
         return response
 
-    def _complete_json_gemini(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
+    def _complete_json_gemini(self, system_prompt: str, user_payload: dict[str, Any], temperature: float) -> dict[str, Any]:
         request_json: dict[str, Any] = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [
@@ -234,7 +234,7 @@ class LLMClient:
                 }
             ],
             "generationConfig": {
-                "temperature": 0.2,
+                "temperature": temperature,
                 "responseMimeType": "application/json",
             },
         }
@@ -255,7 +255,12 @@ class LLMClient:
         self._record_usage(system_prompt, user_payload, content)
         return parse_json_object(content)
 
-    def complete_json(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
+    def complete_json(
+        self,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        temperature: float = 0.2,
+    ) -> dict[str, Any]:
         if not self.available:
             if self.settings.llm_provider == "gemini":
                 raise LLMError("GEMINI_API_KEY is missing")
@@ -269,11 +274,11 @@ class LLMClient:
         self._wait_for_rate_limit()
 
         if self.settings.llm_provider == "gemini":
-            return self._complete_json_gemini(system_prompt, user_payload)
+            return self._complete_json_gemini(system_prompt, user_payload, temperature)
 
         request_json: dict[str, Any] = {
             "model": self.settings.model_name,
-            "temperature": 0.2,
+            "temperature": temperature,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},

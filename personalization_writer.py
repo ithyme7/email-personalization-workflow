@@ -52,7 +52,7 @@ def write_personalization(
         "variant_instruction": variant_instruction,
     }
     try:
-        raw = client.complete_json(prompt, payload)
+        raw = client.complete_json(prompt, payload, temperature=0.6)
     except LLMError as exc:
         return PersonalizationDraft(
             opening_line="",
