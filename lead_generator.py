@@ -77,20 +77,27 @@ TARGET_CONTACT_EXPORT_COLUMNS = [
 
 PERSONAL_EMAIL_BLOCKLIST = {
     "admin",
+    "affiliate",
     "billing",
     "careers",
     "contact",
     "customerservice",
     "data",
+    "dpo",
+    "grievance",
     "hello",
     "help",
     "hr",
     "info",
+    "jugendschutz",
     "jobs",
     "legal",
     "marketing",
     "media",
     "news",
+    "officer",
+    "partner",
+    "partners",
     "press",
     "privacy",
     "sales",
@@ -110,13 +117,21 @@ TARGET_ROLE_TERMS = (
 )
 
 PERSON_NAME_BLOCKLIST = {
+    "as",
+    "boo",
     "ceo",
     "content",
     "co-founder",
     "cofounder",
     "duckduckgo",
     "founder",
+    "grievance",
+    "jugendschutz",
     "markdown",
+    "partner",
+    "partners",
+    "privacy",
+    "profile",
     "source",
     "title",
     "cto",
@@ -570,7 +585,12 @@ def parse_contact_candidates(html: str, source_url: str, company_domain: str = "
     text_lines = [_clean_text(line) for line in soup.get_text("\n", strip=True).splitlines()]
     text_lines = [line for line in text_lines if line]
     text_blob = "\n".join(text_lines)
-    emails = [email for email in dict.fromkeys(EMAIL_PATTERN.findall(text_blob)) if _is_personal_email(email, company_domain)]
+    href_blob = "\n".join(str(anchor.get("href", "")) for anchor in soup.find_all("a", href=True))
+    emails = [
+        email
+        for email in dict.fromkeys(EMAIL_PATTERN.findall("\n".join([text_blob, href_blob])))
+        if _is_personal_email(email, company_domain)
+    ]
     linkedins = _linkedin_profiles_from_soup(soup)
     people = _people_from_role_lines(text_lines)
 
@@ -672,6 +692,8 @@ def search_contact_candidates(
         if not decoded or decoded in existing_profile_urls:
             continue
         full_name = _linked_profile_name_from_title(title)
+        if _linkedin_profile_is_companyish(decoded, lead.organization_name, title, full_name):
+            continue
         first_name = _first_name(full_name) or _first_name_from_linkedin_profile(decoded)
         if not first_name:
             continue
@@ -1060,6 +1082,27 @@ def _company_slug_matches_name(linkedin_url: str, company_name: str) -> bool:
     return slug_key in company_key or company_key in slug_key
 
 
+def _linkedin_profile_is_companyish(profile: str, company_name: str, title: str = "", full_name: str = "") -> bool:
+    slug = urlparse(profile).path.lower().split("/in/", 1)[-1].strip("/")
+    slug_key = re.sub(r"[^a-z0-9]+", "", slug)
+    company_key = re.sub(r"[^a-z0-9]+", "", (company_name or "").lower())
+    title_key = re.sub(r"[^a-z0-9]+", "", (title or "").lower())
+    name_key = re.sub(r"[^a-z0-9]+", "", (full_name or "").lower())
+    if not slug_key:
+        return True
+    if full_name and _looks_like_person_name(full_name) and len(full_name.split()) >= 2:
+        return False
+    if company_key and (slug_key in company_key or company_key in slug_key or company_key in title_key):
+        return True
+    if slug_key.startswith("the") and company_key and company_key in slug_key:
+        return True
+    if any(token in slug_key for token in ["app", "official", "team", "company", "careers"]):
+        return True
+    if name_key and name_key == company_key:
+        return True
+    return False
+
+
 def _contact_search_queries(lead: GeneratedLead) -> list[str]:
     company = _clean_text(lead.organization_name)
     if not company:
@@ -1192,6 +1235,9 @@ def _is_personal_email(email: str, company_domain: str = "") -> bool:
     domain = domain.removeprefix("www.")
     if not local_clean or local_clean in PERSONAL_EMAIL_BLOCKLIST:
         return False
+    local_tokens = [token for token in re.split(r"[^a-z0-9]+", local_clean) if token]
+    if any(token in PERSONAL_EMAIL_BLOCKLIST for token in local_tokens):
+        return False
     if any(local_clean.startswith(prefix + "+") or local_clean.startswith(prefix + ".") for prefix in PERSONAL_EMAIL_BLOCKLIST):
         return False
     if company_domain and domain and not (domain.endswith(company_domain) or company_domain.endswith(domain)):
@@ -1232,7 +1278,7 @@ def _first_name(value: str) -> str:
 def _first_name_from_email_local(local: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z._-]", "", local or "")
     first_part = re.split(r"[._-]+", cleaned)[0]
-    if len(first_part) < 2 or first_part.lower() in PERSONAL_EMAIL_BLOCKLIST:
+    if len(first_part) < 2 or first_part.lower() in PERSONAL_EMAIL_BLOCKLIST or first_part.lower() in PERSON_NAME_BLOCKLIST:
         return ""
     return first_part[:1].upper() + first_part[1:].lower()
 
@@ -1278,6 +1324,8 @@ def _first_name_from_linkedin_profile(profile: str) -> str:
     if not parts:
         return ""
     first = parts[0]
+    if first in PERSON_NAME_BLOCKLIST or len(first) < 2:
+        return ""
     return first[:1].upper() + first[1:]
 
 

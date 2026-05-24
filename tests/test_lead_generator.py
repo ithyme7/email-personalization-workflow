@@ -212,6 +212,21 @@ def test_parse_contact_candidates_prefers_person_level_contacts() -> None:
     assert "hello@example.app" not in {candidate.email for candidate in candidates}
 
 
+def test_parse_contact_candidates_rejects_generic_legal_and_partner_inboxes() -> None:
+    html = """
+    <a href="mailto:grievance-officer-in@hinge.co">Grievance Officer</a>
+    <a href="mailto:jugendschutz@lovoo.com">Jugendschutz</a>
+    <a href="mailto:partners@theleague.com">Partners</a>
+    <a href="mailto:alex@example.app">Alex</a>
+    """
+    candidates = parse_contact_candidates(html, "https://example.app/contact", company_domain="")
+    emails = {candidate.email for candidate in candidates}
+    assert "alex@example.app" in emails
+    assert "grievance-officer-in@hinge.co" not in emails
+    assert "jugendschutz@lovoo.com" not in emails
+    assert "partners@theleague.com" not in emails
+
+
 def test_contact_export_dataframe_matches_personalizer_contact_schema() -> None:
     lead = app_store_payload_to_leads(
         {
@@ -248,6 +263,25 @@ def test_contact_export_dataframe_matches_personalizer_contact_schema() -> None:
     assert df.loc[0, "Personal Email"] == "ania@rootd.io"
 
 
+def test_contact_export_dataframe_strict_mode_excludes_blank_unmatched_rows() -> None:
+    lead = GeneratedLead(
+        organization_name="Blank Co",
+        website="https://blank.example",
+        app_store_url="",
+        source="test",
+        discovery_query="test",
+        source_title="",
+        source_snippet="",
+        lead_score=80,
+        lead_notes="",
+    )
+    strict = contact_export_dataframe([lead], {})
+    manual = contact_export_dataframe([lead], {}, include_unmatched_companies=True)
+    assert strict.empty
+    assert len(manual) == 1
+    assert manual.loc[0, "Company Name"] == "Blank Co"
+
+
 def test_search_contact_candidates_extracts_linkedin_profiles_from_public_results() -> None:
     lead = GeneratedLead(
         organization_name="Example",
@@ -263,6 +297,38 @@ def test_search_contact_candidates_extracts_linkedin_profiles_from_public_result
     candidates = search_contact_candidates(lead, session=FakeSearchSession())  # type: ignore[arg-type]
     assert candidates[0].first_name == "Jane"
     assert candidates[0].linkedin_url == "https://www.linkedin.com/in/jane-doe-123"
+
+
+def test_search_contact_candidates_rejects_companyish_linkedin_profile_results() -> None:
+    class FakeCompanyishResponse:
+        status_code = 200
+        text = """
+## [BOO - LinkedIn](https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.linkedin.com%2Fin%2Fthebooapp&rut=abc)
+BOO profile result.
+"""
+
+    class FakeCompanyishSession:
+        def get(self, *args, **kwargs) -> FakeCompanyishResponse:
+            return FakeCompanyishResponse()
+
+    lead = GeneratedLead(
+        organization_name="Boo",
+        website="https://boo.world",
+        app_store_url="",
+        source="test",
+        discovery_query="dating",
+        source_title="",
+        source_snippet="",
+        lead_score=80,
+        lead_notes="",
+    )
+    candidates = search_contact_candidates(
+        lead,
+        session=FakeCompanyishSession(),  # type: ignore[arg-type]
+        cache=DiscoveryCache(enabled=False),
+        max_search_queries=1,
+    )
+    assert candidates == []
 
 
 def test_discover_company_linkedin_prefers_owned_site_links() -> None:

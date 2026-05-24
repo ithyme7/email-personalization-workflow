@@ -1277,16 +1277,18 @@ def _lead_generator_panel() -> None:
                             request_delay_seconds=float(search_delay),
                             use_cache=use_discovery_cache,
                         )
-                        strict_contact_count = len(contact_export_dataframe(leads, contact_lookup))
-                    contact_df = contact_export_dataframe(leads, contact_lookup, include_unmatched_companies=True)
+                    ready_contact_df = contact_export_dataframe(leads, contact_lookup)
+                    manual_contact_df = contact_export_dataframe(leads, contact_lookup, include_unmatched_companies=True)
+                    strict_contact_count = len(ready_contact_df)
                     contact_path = _generated_contacts_path()
-                    contact_df.to_csv(contact_path, index=False, encoding="utf-8-sig")
+                    ready_contact_df.to_csv(contact_path, index=False, encoding="utf-8-sig")
                     st.session_state["generated_raw_leads_df"] = raw_df
                     st.session_state["generated_raw_leads_path"] = str(raw_path)
-                    st.session_state["generated_contact_df"] = contact_df
+                    st.session_state["generated_contact_df"] = ready_contact_df
+                    st.session_state["generated_manual_contact_df"] = manual_contact_df
                     st.session_state["generated_strict_contact_count"] = strict_contact_count
                     st.session_state["generated_contact_path"] = str(contact_path)
-                    st.session_state["generated_leads_df"] = contact_df if not contact_df.empty else raw_df
+                    st.session_state["generated_leads_df"] = ready_contact_df if not ready_contact_df.empty else raw_df
                     st.session_state["generated_leads_path"] = str(contact_path or raw_path)
                     st.session_state["lead_generation_fallback_message"] = fallback_message
                 st.success(f"Generated {len(raw_df)} companies and {strict_contact_count} public person-level contacts.")
@@ -1296,6 +1298,7 @@ def _lead_generator_panel() -> None:
                 st.error(f"Lead generation failed: {exc}")
     with right:
         contact_df = st.session_state.get("generated_contact_df")
+        manual_contact_df = st.session_state.get("generated_manual_contact_df")
         raw_df = st.session_state.get("generated_raw_leads_df")
         generated_path = st.session_state.get("generated_leads_path")
         if contact_df is None and generated_path and Path(generated_path).exists():
@@ -1308,7 +1311,7 @@ def _lead_generator_panel() -> None:
         fallback_message = st.session_state.get("lead_generation_fallback_message")
         if fallback_message:
             st.info(fallback_message)
-        st.dataframe(preview_df, use_container_width=True, height=420)
+        st.dataframe(preview_df, use_container_width=True, height=420, hide_index=True)
         c1, c2, c3 = st.columns(3)
         strict_contact_count = int(st.session_state.get("generated_strict_contact_count", 0) or 0)
         if contact_df is not None and not contact_df.empty:
@@ -1327,10 +1330,23 @@ def _lead_generator_panel() -> None:
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
-            if strict_contact_count < len(contact_df):
+        if manual_contact_df is not None and not manual_contact_df.empty:
+            manual_csv = manual_contact_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            c2.download_button(
+                "Download manual-fill CSV",
+                manual_csv,
+                "manual_fill_contact_leads.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+            if raw_df is not None and strict_contact_count < len(raw_df):
                 st.warning(
-                    f"{strict_contact_count}/{len(contact_df)} rows have a public person-level email or LinkedIn profile. "
-                    "Rows without public contacts are kept in the same schema for manual enrichment."
+                    f"{strict_contact_count}/{len(raw_df)} companies have reliable public person-level contact data. "
+                    "The contact CSV/XLSX only contains those ready rows; use manual-fill CSV for the rest."
+                )
+            if contact_df is None or contact_df.empty:
+                st.warning(
+                    "No reliable person-level contacts were found. Use the raw company CSV or manual-fill CSV instead of feeding blanks into the personalizer."
                 )
         raw_download_df = raw_df if raw_df is not None else preview_df
         raw_csv = raw_download_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
