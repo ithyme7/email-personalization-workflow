@@ -1152,6 +1152,29 @@ def _profile_picker() -> str:
     return selected_tone
 
 
+def _looks_like_app_lead_query(value: str) -> bool:
+    lower = str(value or "").lower()
+    return any(term in lower for term in ["app", "apps", "mobile", "app store", "ios", "android"])
+
+
+def _merge_generated_leads(primary: list, secondary: list, max_leads: int) -> list:
+    merged = []
+    seen = set()
+    seen_hosts = set()
+    for lead in [*primary, *secondary]:
+        key = (getattr(lead, "app_store_url", "") or getattr(lead, "website", "") or getattr(lead, "organization_name", "")).lower()
+        host = str(getattr(lead, "website", "") or "").lower().removeprefix("https://").removeprefix("http://").removeprefix("www.").split("/", 1)[0]
+        if not key or key in seen or (host and host in seen_hosts):
+            continue
+        seen.add(key)
+        if host:
+            seen_hosts.add(host)
+        merged.append(lead)
+        if len(merged) >= max_leads:
+            break
+    return merged
+
+
 def _lead_generator_panel() -> None:
     st.subheader("Generate lead list")
     st.caption("Creates a lightweight company/domain CSV from public sources, with optional cached founder/CEO/CTO discovery.")
@@ -1218,16 +1241,28 @@ def _lead_generator_panel() -> None:
         if st.button("Generate leads", type="primary", use_container_width=True):
             try:
                 with st.spinner("Searching public sources and deduping company domains..."):
+                    fallback_message = ""
                     if source_type == "Apple App Store":
                         leads = generate_app_store_leads(app_terms, country=region, max_leads=max_leads)
                     elif source_type.startswith("Public web search"):
                         leads = generate_leads(web_queries, max_leads=max_leads)
+                        if app_terms and _looks_like_app_lead_query(" ".join([lead_query, target_customer, preference])) and len(leads) < max(3, int(max_leads * 0.5)):
+                            web_count = len(leads)
+                            app_fallback = generate_app_store_leads(app_terms, country=region, max_leads=max_leads)
+                            leads = _merge_generated_leads(leads, app_fallback, max_leads)
+                            fallback_message = (
+                                f"Public web search found only {web_count} usable companies, "
+                                "so App Store fallback filled the lead list."
+                            )
                     else:
                         app_limit = max(1, int(max_leads * 0.7))
                         leads = generate_app_store_leads(app_terms, country=region, max_leads=app_limit)
                         remaining = max_leads - len(leads)
                         if remaining > 0:
                             leads.extend(generate_leads(web_queries, max_leads=remaining))
+                        if not leads and app_terms:
+                            leads = generate_app_store_leads(app_terms, country=region, max_leads=max_leads)
+                            fallback_message = "The first pass returned 0 companies, so softer App Store fallback terms were used."
                     raw_df = generated_leads_dataframe(leads)
                     raw_path = _generated_leads_path()
                     raw_df.to_csv(raw_path, index=False, encoding="utf-8-sig")
@@ -1253,7 +1288,10 @@ def _lead_generator_panel() -> None:
                     st.session_state["generated_contact_path"] = str(contact_path)
                     st.session_state["generated_leads_df"] = contact_df if not contact_df.empty else raw_df
                     st.session_state["generated_leads_path"] = str(contact_path or raw_path)
+                    st.session_state["lead_generation_fallback_message"] = fallback_message
                 st.success(f"Generated {len(raw_df)} companies and {strict_contact_count} public person-level contacts.")
+                if fallback_message:
+                    st.info(fallback_message)
             except Exception as exc:
                 st.error(f"Lead generation failed: {exc}")
     with right:
@@ -1267,6 +1305,9 @@ def _lead_generator_panel() -> None:
         if preview_df is None:
             st.info("Generated leads will appear here.")
             return
+        fallback_message = st.session_state.get("lead_generation_fallback_message")
+        if fallback_message:
+            st.info(fallback_message)
         st.dataframe(preview_df, use_container_width=True, height=420)
         c1, c2, c3 = st.columns(3)
         strict_contact_count = int(st.session_state.get("generated_strict_contact_count", 0) or 0)

@@ -21,24 +21,49 @@ DISCOVERY_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
 DIRECTORY_DOMAINS = {
     "apps.apple.com",
+    "appfigures.com",
+    "apptopia.com",
+    "capterra.com",
     "crunchbase.com",
+    "datingadvice.com",
+    "datingnews.com",
+    "developerbazaar.com",
     "facebook.com",
+    "forbes.com",
+    "g2.com",
     "instagram.com",
     "linkedin.com",
+    "parade.com",
+    "pcmag.com",
     "play.google.com",
+    "producthunt.com",
+    "similarweb.com",
+    "techcrunch.com",
     "twitter.com",
     "x.com",
     "youtube.com",
 }
 
 NOISE_TITLE_TERMS = {
+    "best ",
     "login",
+    "ranked",
+    "review",
     "sign in",
     "privacy policy",
     "terms",
+    "tested",
+    "top ",
     "support",
     "contact",
 }
+
+LISTICLE_RESULT_PATTERN = re.compile(
+    r"\b(best|top|ranked|tested|reviews?|alternatives?|comparison|directory|list of)\b|"
+    r"\b20[2-9][0-9]\b|"
+    r"\b\d+\s+(best|top)\b",
+    re.IGNORECASE,
+)
 
 TARGET_CONTACT_EXPORT_COLUMNS = [
     "First Name",
@@ -187,8 +212,17 @@ def build_lead_search_queries(
     region: str = "",
     extra_keywords: str = "",
 ) -> list[str]:
-    base = " ".join(part.strip() for part in [niche, target_customer, region] if part.strip())
-    extras = [item.strip() for item in re.split(r"[\n,]+", extra_keywords or "") if item.strip()]
+    base = " ".join(
+        part
+        for part in [
+            _normalize_search_phrase(niche),
+            _clean_lead_search_context(target_customer),
+            _normalize_region(region),
+        ]
+        if part
+    )
+    extras = [_normalize_search_phrase(item) for item in re.split(r"[\n,]+", extra_keywords or "") if item.strip()]
+    extras = [item for item in extras if item]
     anchors = extras or [
         "app",
         "startup",
@@ -199,6 +233,8 @@ def build_lead_search_queries(
         "founder",
     ]
     queries = []
+    if base:
+        queries.append(f"{base} -jobs -blog")
     for anchor in anchors:
         query = " ".join(part for part in [base, anchor, "-jobs", "-blog"] if part).strip()
         if query and query not in queries:
@@ -207,11 +243,17 @@ def build_lead_search_queries(
 
 
 def build_app_store_terms(niche: str, extra_keywords: str = "") -> list[str]:
-    terms = [item.strip() for item in re.split(r"[\n,]+", extra_keywords or "") if item.strip()]
-    if not terms and niche.strip():
-        terms = [niche.strip()]
-    elif niche.strip():
-        terms = [f"{niche.strip()} {term}" for term in terms]
+    base = _normalize_search_phrase(niche)
+    raw_terms = [_normalize_search_phrase(item) for item in re.split(r"[\n,]+", extra_keywords or "") if item.strip()]
+    terms: list[str] = []
+    if base:
+        terms.append(base)
+    for term in raw_terms:
+        if not term:
+            continue
+        if base and term != base and not _phrase_subsumes(term, base):
+            terms.append(f"{base} {term}")
+        terms.append(term)
     return list(dict.fromkeys(term for term in terms if term))
 
 
@@ -696,19 +738,27 @@ def contact_export_dataframe(
 
 
 def _search_web(query: str, session: requests.Session, timeout_seconds: int) -> list[dict[str, str]]:
-    response = session.get(
-        SEARCH_URL,
-        params={"q": query},
-        timeout=timeout_seconds,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
-            )
-        },
-    )
-    response.raise_for_status()
-    return parse_search_results(response.text)
+    try:
+        response = session.get(
+            SEARCH_URL,
+            params={"q": query},
+            timeout=timeout_seconds,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+                )
+            },
+        )
+        response.raise_for_status()
+        results = parse_search_results(response.text)
+        if results:
+            return results
+    except requests.RequestException:
+        pass
+    fallback_url = f"{CONTACT_SEARCH_URL}?q={quote_plus(query)}"
+    text = _fetch_text(fallback_url, session, timeout_seconds)
+    return parse_markdown_search_results(text)
 
 
 def parse_search_results(html: str) -> list[dict[str, str]]:
@@ -726,6 +776,27 @@ def parse_search_results(html: str) -> list[dict[str, str]]:
         snippet = _clean_text(snippet_node.get_text(" ", strip=True) if snippet_node else "")
         if title:
             results.append({"url": url, "title": title, "snippet": snippet})
+    return results
+
+
+def parse_markdown_search_results(text: str) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for title, link in _markdown_links(text):
+        clean_title = _clean_text(title.replace("**", ""))
+        if not clean_title or clean_title.lower().startswith("image "):
+            continue
+        url = _decode_result_url(link)
+        if not url.startswith(("http://", "https://")):
+            continue
+        host = _host(url)
+        if not host or host.endswith("duckduckgo.com") or host.startswith("external-content."):
+            continue
+        normalized = url.split("#", 1)[0]
+        if normalized in seen_urls:
+            continue
+        seen_urls.add(normalized)
+        results.append({"url": normalized, "title": clean_title, "snippet": _markdown_snippet_after_link(text, link)})
     return results
 
 
@@ -774,6 +845,9 @@ def score_lead(company: str, website: str, title: str, snippet: str, query: str)
     if _contains_noise_term(title):
         score -= 20
         notes.append("low_value_page_title")
+    if LISTICLE_RESULT_PATTERN.search(" ".join([title, snippet])):
+        score -= 45
+        notes.append("article_or_ranking_page")
     if _is_noise_host(_host(website)):
         score -= 50
         notes.append("directory_or_social_domain")
@@ -1012,6 +1086,65 @@ def _with_candidate_note(candidate: ContactCandidate, note: str) -> ContactCandi
         confidence=candidate.confidence,
         notes=notes,
     )
+
+
+def _normalize_search_phrase(value: str) -> str:
+    cleaned = _clean_text(value).lower()
+    cleaned = cleaned.replace("/", " ")
+    replacements = {
+        "datendating": "dating",
+        "appdating": "dating app",
+        "sitesonline": "site online",
+        "siteonline": "site online",
+        "datingapps": "dating apps",
+        "datingapp": "dating app",
+    }
+    for old, new in replacements.items():
+        cleaned = re.sub(rf"\b{re.escape(old)}\b", new, cleaned)
+    cleaned = re.sub(r"[^a-z0-9 +#.-]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _clean_lead_search_context(value: str) -> str:
+    cleaned = _normalize_search_phrase(value)
+    if not cleaned:
+        return ""
+    cleaned = re.sub(
+        r"\b(founder|founders|cofounder|co-founder|ceo|cto|chief executive officer|chief technology officer|contacts?|emails?|linkedin|with|or)\b",
+        " ",
+        cleaned,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _normalize_region(value: str) -> str:
+    cleaned = _normalize_search_phrase(value)
+    if cleaned in {"us", "usa", "united states"}:
+        return "US"
+    if cleaned in {"uk", "gb", "united kingdom"}:
+        return "UK"
+    return cleaned.upper() if len(cleaned) == 2 else cleaned
+
+
+def _phrase_subsumes(value: str, base: str) -> bool:
+    value_tokens = set(re.findall(r"[a-z0-9]+", value.lower()))
+    base_tokens = set(re.findall(r"[a-z0-9]+", base.lower()))
+    return bool(base_tokens) and base_tokens.issubset(value_tokens)
+
+
+def _markdown_snippet_after_link(text: str, link: str) -> str:
+    marker = f"]({link})"
+    index = text.find(marker)
+    if index == -1:
+        return ""
+    after = text[index + len(marker) : index + len(marker) + 700]
+    for line in after.splitlines():
+        cleaned = _clean_text(line.replace("**", ""))
+        if cleaned and not cleaned.startswith(("![", "##", "#", "[")):
+            return cleaned[:300]
+    return ""
 
 
 def _people_from_role_lines(lines: list[str]) -> list[tuple[str, str]]:

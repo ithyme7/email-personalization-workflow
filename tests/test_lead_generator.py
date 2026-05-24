@@ -17,6 +17,7 @@ from lead_generator import (
     generate_leads,
     generated_leads_dataframe,
     parse_contact_candidates,
+    parse_markdown_search_results,
     parse_search_results,
     search_contact_candidates,
 )
@@ -95,6 +96,23 @@ def test_parse_search_results_decodes_duckduckgo_links() -> None:
     assert "mental health app" in results[0]["title"].lower()
 
 
+def test_parse_markdown_search_results_decodes_public_search_fallback() -> None:
+    markdown = """
+## [Example App - Official Site](https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.app%2F&rut=abc)
+Example App is a mobile dating app for singles.
+
+## [Image 1](https://external-content.duckduckgo.com/ip3/example.app.ico)
+"""
+    results = parse_markdown_search_results(markdown)
+    assert results == [
+        {
+            "url": "https://example.app/",
+            "title": "Example App - Official Site",
+            "snippet": "Example App is a mobile dating app for singles.",
+        }
+    ]
+
+
 def test_generate_leads_dedupes_and_filters_directory_domains() -> None:
     leads = generate_leads(["mental health app"], max_leads=10, session=FakeSession())  # type: ignore[arg-type]
     assert [lead.website for lead in leads] == [
@@ -109,6 +127,7 @@ def test_generate_leads_dedupes_and_filters_directory_domains() -> None:
 def test_build_lead_search_queries_uses_extra_angles() -> None:
     queries = build_lead_search_queries("mental health", "mobile apps", "US", "pricing\nfounder")
     assert queries == [
+        "mental health mobile apps US -jobs -blog",
         "mental health mobile apps US pricing -jobs -blog",
         "mental health mobile apps US founder -jobs -blog",
     ]
@@ -139,8 +158,34 @@ def test_app_store_payload_to_leads_creates_personalizer_ready_rows() -> None:
 
 def test_build_app_store_terms_combines_niche_and_terms() -> None:
     assert build_app_store_terms("mental health", "sleep\nadhd") == [
+        "mental health",
         "mental health sleep",
+        "sleep",
         "mental health adhd",
+        "adhd",
+    ]
+
+
+def test_build_app_store_terms_keeps_base_term_for_noisy_free_text() -> None:
+    assert build_app_store_terms("dating app", "dating sitesonline\ndatendating\nappdating") == [
+        "dating app",
+        "dating app dating site online",
+        "dating site online",
+        "dating app dating",
+        "dating",
+    ]
+
+
+def test_build_lead_search_queries_removes_contact_intent_from_company_search() -> None:
+    queries = build_lead_search_queries(
+        "dating app",
+        "Dating apps with founder, CEO or CTO contacts",
+        "US",
+        "dating sitesonline",
+    )
+    assert queries == [
+        "dating app dating apps US -jobs -blog",
+        "dating app dating apps US dating site online -jobs -blog",
     ]
 
 
