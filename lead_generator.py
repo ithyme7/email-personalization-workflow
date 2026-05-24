@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape as html_escape
 import re
 from typing import Iterable
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -12,6 +13,7 @@ import requests
 
 SEARCH_URL = "https://duckduckgo.com/html/"
 APP_STORE_SEARCH_URL = "https://itunes.apple.com/search"
+CONTACT_SEARCH_URL = "https://r.jina.ai/http://https://duckduckgo.com/html/"
 
 DIRECTORY_DOMAINS = {
     "apps.apple.com",
@@ -34,6 +36,87 @@ NOISE_TITLE_TERMS = {
     "contact",
 }
 
+TARGET_CONTACT_EXPORT_COLUMNS = [
+    "First Name",
+    "Copy",
+    "Personalization Line",
+    "Company Name",
+    "LinkedIn Profile",
+    "Personal Email",
+    "Company Website",
+]
+
+PERSONAL_EMAIL_BLOCKLIST = {
+    "admin",
+    "billing",
+    "careers",
+    "contact",
+    "customerservice",
+    "data",
+    "hello",
+    "help",
+    "hr",
+    "info",
+    "jobs",
+    "legal",
+    "marketing",
+    "media",
+    "news",
+    "press",
+    "privacy",
+    "sales",
+    "security",
+    "support",
+    "team",
+}
+
+TARGET_ROLE_TERMS = (
+    "founder",
+    "co-founder",
+    "cofounder",
+    "chief executive officer",
+    "ceo",
+    "chief technology officer",
+    "cto",
+)
+
+PERSON_NAME_BLOCKLIST = {
+    "ceo",
+    "content",
+    "co-founder",
+    "cofounder",
+    "duckduckgo",
+    "founder",
+    "markdown",
+    "source",
+    "title",
+    "cto",
+    "url",
+}
+
+CONTACT_PAGE_HINTS = (
+    "about",
+    "team",
+    "founder",
+    "founders",
+    "leadership",
+    "company",
+    "contact",
+)
+
+EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+LINKEDIN_PROFILE_PATTERN = re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/in/[A-Za-z0-9_%\-/?=&.]+", re.IGNORECASE)
+PERSON_ROLE_PATTERN = re.compile(
+    r"\b([A-Z][A-Za-z'`-]+(?:\s+[A-Z][A-Za-z'`-]+){0,3})\b.{0,80}?\b("
+    r"Co[-\s]?Founder|Founder|CEO|Chief Executive Officer|CTO|Chief Technology Officer"
+    r")\b",
+    re.IGNORECASE,
+)
+ROLE_PATTERN = re.compile(
+    r"\b(Co[-\s]?Founder|Founder|CEO|Chief Executive Officer|CTO|Chief Technology Officer)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class GeneratedLead:
@@ -46,6 +129,18 @@ class GeneratedLead:
     source_snippet: str
     lead_score: int
     lead_notes: str
+
+
+@dataclass(frozen=True)
+class ContactCandidate:
+    first_name: str
+    full_name: str = ""
+    role: str = ""
+    email: str = ""
+    linkedin_url: str = ""
+    source_url: str = ""
+    confidence: int = 0
+    notes: str = ""
 
 
 def build_lead_search_queries(
@@ -229,6 +324,234 @@ def generated_leads_dataframe(leads: Iterable[GeneratedLead]) -> pd.DataFrame:
     )
 
 
+def enrich_contacts_for_leads(
+    leads: Iterable[GeneratedLead],
+    max_contacts_per_company: int = 1,
+    timeout_seconds: int = 12,
+    use_search_fallback: bool = True,
+    session: requests.Session | None = None,
+) -> dict[str, list[ContactCandidate]]:
+    active_session = session or requests.Session()
+    enriched: dict[str, list[ContactCandidate]] = {}
+    for lead in leads:
+        contacts = discover_contacts_for_lead(
+            lead,
+            max_contacts=max_contacts_per_company,
+            timeout_seconds=timeout_seconds,
+            use_search_fallback=use_search_fallback,
+            session=active_session,
+        )
+        enriched[_lead_key(lead)] = contacts
+    return enriched
+
+
+def discover_contacts_for_lead(
+    lead: GeneratedLead,
+    max_contacts: int = 1,
+    timeout_seconds: int = 12,
+    use_search_fallback: bool = True,
+    session: requests.Session | None = None,
+) -> list[ContactCandidate]:
+    website = normalize_company_url(lead.website)
+    if not website or _is_noise_host(_host(website)) or "apps.apple.com" in _host(website):
+        return []
+    active_session = session or requests.Session()
+    pages = fetch_contact_pages(website, timeout_seconds=timeout_seconds, session=active_session)
+    candidates: list[ContactCandidate] = []
+    for page_url, html in pages:
+        candidates.extend(parse_contact_candidates(html, page_url, company_domain=_host(website)))
+    ranked = rank_contact_candidates(candidates)
+    if use_search_fallback and len(ranked) < max_contacts:
+        candidates.extend(search_contact_candidates(lead, timeout_seconds=timeout_seconds, session=active_session))
+    return rank_contact_candidates(candidates)[:max_contacts]
+
+
+def fetch_contact_pages(
+    website: str,
+    timeout_seconds: int = 12,
+    session: requests.Session | None = None,
+    max_pages: int = 5,
+) -> list[tuple[str, str]]:
+    active_session = session or requests.Session()
+    homepage = normalize_company_url(website)
+    urls = [homepage]
+    html_by_url: dict[str, str] = {}
+    homepage_html = _fetch_html(homepage, active_session, timeout_seconds)
+    if homepage_html:
+        html_by_url[homepage] = homepage_html
+        urls.extend(_candidate_contact_links(homepage, homepage_html))
+    for path in ["/about", "/about-us", "/team", "/company", "/leadership", "/founders", "/contact"]:
+        urls.append(homepage.rstrip("/") + path)
+
+    pages: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for url in urls:
+        normalized = url.split("#", 1)[0].rstrip("/")
+        if normalized in seen or len(pages) >= max_pages:
+            continue
+        seen.add(normalized)
+        html = html_by_url.get(normalized) or _fetch_html(normalized, active_session, timeout_seconds)
+        if html:
+            pages.append((normalized, html))
+    return pages
+
+
+def parse_contact_candidates(html: str, source_url: str, company_domain: str = "") -> list[ContactCandidate]:
+    soup = BeautifulSoup(html or "", "html.parser")
+    text_lines = [_clean_text(line) for line in soup.get_text("\n", strip=True).splitlines()]
+    text_lines = [line for line in text_lines if line]
+    text_blob = "\n".join(text_lines)
+    emails = [email for email in dict.fromkeys(EMAIL_PATTERN.findall(text_blob)) if _is_personal_email(email, company_domain)]
+    linkedins = _linkedin_profiles_from_soup(soup)
+    people = _people_from_role_lines(text_lines)
+
+    candidates: list[ContactCandidate] = []
+    for full_name, role in people:
+        first_name = _first_name(full_name)
+        email = _best_email_for_name(first_name, full_name, emails)
+        linkedin_url = _best_linkedin_for_name(first_name, full_name, linkedins)
+        confidence = 40
+        notes = ["role_line_found"]
+        if email:
+            confidence += 30
+            notes.append("personal_email_matched")
+        if linkedin_url:
+            confidence += 25
+            notes.append("linkedin_profile_matched")
+        candidates.append(
+            ContactCandidate(
+                first_name=first_name,
+                full_name=full_name,
+                role=role,
+                email=email,
+                linkedin_url=linkedin_url,
+                source_url=source_url,
+                confidence=min(100, confidence),
+                notes=" | ".join(notes),
+            )
+        )
+
+    used_emails = {candidate.email.lower() for candidate in candidates if candidate.email}
+    for email in emails:
+        if email.lower() in used_emails:
+            continue
+        local = email.split("@", 1)[0]
+        first_name = _first_name_from_email_local(local)
+        if not first_name:
+            continue
+        candidates.append(
+            ContactCandidate(
+                first_name=first_name,
+                email=email,
+                source_url=source_url,
+                confidence=55,
+                notes="personal_email_found_without_role",
+            )
+        )
+    return rank_contact_candidates(candidates)
+
+
+def search_contact_candidates(
+    lead: GeneratedLead,
+    timeout_seconds: int = 12,
+    session: requests.Session | None = None,
+) -> list[ContactCandidate]:
+    active_session = session or requests.Session()
+    query = f'"{lead.organization_name}" founder CEO CTO email LinkedIn'
+    url = f"{CONTACT_SEARCH_URL}?q={quote_plus(query)}"
+    text = _fetch_text(url, active_session, timeout_seconds)
+    if not text:
+        return []
+    decoded_links = [_decode_result_url(link) for _, link in _markdown_links(text)]
+    linkedin_profiles = [
+        profile.rstrip("/")
+        for link in decoded_links
+        for profile in LINKEDIN_PROFILE_PATTERN.findall(link)
+        if "/company/" not in profile.lower()
+    ]
+    company_domain = _host(lead.website)
+    search_markup = "<html><body><pre>" + html_escape("\n".join([text, *linkedin_profiles])) + "</pre></body></html>"
+    candidates = parse_contact_candidates(
+        search_markup,
+        url,
+        company_domain=company_domain,
+    )
+    candidates = [
+        candidate
+        for candidate in candidates
+        if not _is_company_name_candidate(candidate.full_name, lead.organization_name)
+    ]
+    existing_profile_urls = {candidate.linkedin_url for candidate in candidates if candidate.linkedin_url}
+    for title, link in _markdown_links(text):
+        decoded = _decode_result_url(link).rstrip("/")
+        if not LINKEDIN_PROFILE_PATTERN.match(decoded) or decoded in existing_profile_urls or "/company/" in decoded.lower():
+            continue
+        full_name = _linked_profile_name_from_title(title)
+        first_name = _first_name(full_name) or _first_name_from_linkedin_profile(decoded)
+        if not first_name:
+            continue
+        candidates.append(
+            ContactCandidate(
+                first_name=first_name,
+                full_name=full_name,
+                linkedin_url=decoded,
+                source_url=url,
+                confidence=50,
+                notes="linkedin_profile_search_result",
+            )
+        )
+    return [candidate for candidate in rank_contact_candidates(candidates) if candidate.email or candidate.linkedin_url]
+
+
+def rank_contact_candidates(candidates: Iterable[ContactCandidate]) -> list[ContactCandidate]:
+    best_by_key: dict[str, ContactCandidate] = {}
+    for candidate in candidates:
+        key = (candidate.email or candidate.linkedin_url or candidate.full_name or candidate.first_name).lower()
+        if not key:
+            continue
+        existing = best_by_key.get(key)
+        if not existing or candidate.confidence > existing.confidence:
+            best_by_key[key] = candidate
+    return sorted(
+        best_by_key.values(),
+        key=lambda candidate: (
+            candidate.confidence,
+            bool(candidate.email),
+            bool(candidate.linkedin_url),
+            _role_priority(candidate.role),
+        ),
+        reverse=True,
+    )
+
+
+def contact_export_dataframe(
+    leads: Iterable[GeneratedLead],
+    contact_lookup: dict[str, list[ContactCandidate]] | None = None,
+    include_unmatched_companies: bool = False,
+) -> pd.DataFrame:
+    rows: list[dict[str, str]] = []
+    lookup = contact_lookup or {}
+    for lead in leads:
+        contacts = lookup.get(_lead_key(lead), [])
+        if not contacts and include_unmatched_companies:
+            contacts = [ContactCandidate(first_name="", source_url=lead.source_title, confidence=0)]
+        for contact in contacts:
+            if not include_unmatched_companies and not (contact.email or contact.linkedin_url):
+                continue
+            rows.append(
+                {
+                    "First Name": contact.first_name,
+                    "Copy": "",
+                    "Personalization Line": "",
+                    "Company Name": lead.organization_name,
+                    "LinkedIn Profile": contact.linkedin_url,
+                    "Personal Email": contact.email,
+                    "Company Website": lead.website,
+                }
+            )
+    return pd.DataFrame(rows, columns=TARGET_CONTACT_EXPORT_COLUMNS)
+
+
 def _search_web(query: str, session: requests.Session, timeout_seconds: int) -> list[dict[str, str]]:
     response = session.get(
         SEARCH_URL,
@@ -338,6 +661,221 @@ def score_app_store_lead(
     if genre:
         notes.append(f"genre:{genre}")
     return max(0, min(100, score)), notes
+
+
+def _fetch_html(url: str, session: requests.Session, timeout_seconds: int) -> str:
+    try:
+        response = session.get(
+            url,
+            timeout=timeout_seconds,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36"
+                )
+            },
+        )
+        content_type = response.headers.get("content-type", "")
+        if response.status_code >= 400 or ("html" not in content_type and content_type):
+            return ""
+        return response.text[:500_000]
+    except requests.RequestException:
+        return ""
+
+
+def _fetch_text(url: str, session: requests.Session, timeout_seconds: int) -> str:
+    try:
+        response = session.get(
+            url,
+            timeout=timeout_seconds,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125 Safari/537.36"},
+        )
+        if response.status_code >= 400:
+            return ""
+        return response.text[:500_000]
+    except requests.RequestException:
+        return ""
+
+
+def _candidate_contact_links(base_url: str, html: str) -> list[str]:
+    soup = BeautifulSoup(html or "", "html.parser")
+    base = urlparse(base_url)
+    links: list[str] = []
+    for anchor in soup.find_all("a", href=True):
+        text = _clean_text(anchor.get_text(" ", strip=True)).lower()
+        href = str(anchor.get("href", "")).strip()
+        joined = _join_url(base_url, href)
+        if not joined:
+            continue
+        parsed = urlparse(joined)
+        if parsed.netloc.lower().removeprefix("www.") != base.netloc.lower().removeprefix("www."):
+            continue
+        haystack = f"{text} {parsed.path.lower()}"
+        if any(hint in haystack for hint in CONTACT_PAGE_HINTS):
+            links.append(joined)
+    return list(dict.fromkeys(links))
+
+
+def _join_url(base_url: str, href: str) -> str:
+    if not href or href.startswith(("mailto:", "tel:", "javascript:")):
+        return ""
+    if href.startswith("//"):
+        return "https:" + href
+    if href.startswith(("http://", "https://")):
+        return href
+    parsed = urlparse(base_url)
+    if href.startswith("/"):
+        return f"{parsed.scheme}://{parsed.netloc}{href}"
+    return f"{base_url.rstrip('/')}/{href}"
+
+
+def _linkedin_profiles_from_soup(soup: BeautifulSoup) -> list[str]:
+    profiles: list[str] = []
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor.get("href", "")).strip()
+        match = LINKEDIN_PROFILE_PATTERN.search(href)
+        if match:
+            profiles.append(match.group(0).rstrip("/"))
+    text_profiles = [match.group(0).rstrip("/") for match in LINKEDIN_PROFILE_PATTERN.finditer(soup.get_text(" ", strip=True))]
+    return list(dict.fromkeys(profiles + text_profiles))
+
+
+def _people_from_role_lines(lines: list[str]) -> list[tuple[str, str]]:
+    people: list[tuple[str, str]] = []
+    for line in lines:
+        if not _contains_target_role(line):
+            continue
+        for match in ROLE_PATTERN.finditer(line):
+            before_role = line[: match.start()].strip()
+            name_match = re.search(
+                r"([A-Z][A-Za-z'`-]+(?:\s+[A-Z][A-Za-z'`-]+){0,3})\s*$",
+                before_role,
+            )
+            if not name_match:
+                continue
+            full_name = _clean_person_name(name_match.group(1))
+            role = _clean_text(match.group(1))
+            if full_name and _looks_like_person_name(full_name):
+                people.append((full_name, role))
+    return list(dict.fromkeys(people))
+
+
+def _contains_target_role(value: str) -> bool:
+    lower = value.lower()
+    return any(term in lower for term in TARGET_ROLE_TERMS)
+
+
+def _clean_person_name(value: str) -> str:
+    cleaned = _clean_text(value)
+    cleaned = re.sub(r"^(meet|by|from|with|our)\s+", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip(" ,:-")
+
+
+def _looks_like_person_name(value: str) -> bool:
+    parts = value.split()
+    lower_parts = [part.strip(" ,:-").lower() for part in parts]
+    if value.strip().lower() in PERSON_NAME_BLOCKLIST or any(part in PERSON_NAME_BLOCKLIST for part in lower_parts):
+        return False
+    return 1 <= len(parts) <= 4 and all(part[:1].isalpha() for part in parts)
+
+
+def _is_personal_email(email: str, company_domain: str = "") -> bool:
+    local, _, domain = email.lower().partition("@")
+    local_clean = re.sub(r"[^a-z0-9._+-]", "", local)
+    domain = domain.removeprefix("www.")
+    if not local_clean or local_clean in PERSONAL_EMAIL_BLOCKLIST:
+        return False
+    if any(local_clean.startswith(prefix + "+") or local_clean.startswith(prefix + ".") for prefix in PERSONAL_EMAIL_BLOCKLIST):
+        return False
+    if company_domain and domain and not (domain.endswith(company_domain) or company_domain.endswith(domain)):
+        return False
+    if re.search(r"\d{4,}", local_clean):
+        return False
+    return bool(re.search(r"[a-z]{2,}", local_clean))
+
+
+def _best_email_for_name(first_name: str, full_name: str, emails: list[str]) -> str:
+    compact_full = re.sub(r"[^a-z]", "", full_name.lower())
+    first = first_name.lower()
+    for email in emails:
+        local = email.split("@", 1)[0].lower()
+        compact_local = re.sub(r"[^a-z]", "", local)
+        if compact_local == first or compact_local.startswith(first) or (compact_full and compact_local in compact_full):
+            return email
+    return ""
+
+
+def _best_linkedin_for_name(first_name: str, full_name: str, profiles: list[str]) -> str:
+    name_tokens = [token.lower() for token in re.findall(r"[A-Za-z]+", full_name)]
+    first = first_name.lower()
+    for profile in profiles:
+        lower = profile.lower()
+        if first and first in lower:
+            return profile
+        if name_tokens and all(token in lower for token in name_tokens[:2]):
+            return profile
+    return profiles[0] if len(profiles) == 1 else ""
+
+
+def _first_name(value: str) -> str:
+    parts = re.findall(r"[A-Za-z][A-Za-z'`-]*", value or "")
+    return parts[0] if parts else ""
+
+
+def _first_name_from_email_local(local: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z._-]", "", local or "")
+    first_part = re.split(r"[._-]+", cleaned)[0]
+    if len(first_part) < 2 or first_part.lower() in PERSONAL_EMAIL_BLOCKLIST:
+        return ""
+    return first_part[:1].upper() + first_part[1:].lower()
+
+
+def _role_priority(role: str) -> int:
+    lower = role.lower()
+    if "founder" in lower:
+        return 3
+    if "ceo" in lower or "chief executive" in lower:
+        return 2
+    if "cto" in lower or "chief technology" in lower:
+        return 1
+    return 0
+
+
+def _is_company_name_candidate(full_name: str, company_name: str) -> bool:
+    person = re.sub(r"[^a-z0-9]+", "", (full_name or "").lower())
+    company = re.sub(r"[^a-z0-9]+", "", (company_name or "").lower())
+    if not person or not company:
+        return False
+    return person == company or person in company or company in person
+
+
+def _markdown_links(text: str) -> list[tuple[str, str]]:
+    return [
+        (_clean_text(title), url.strip())
+        for title, url in re.findall(r"\[([^\]]+)\]\((https?://[^)]+)\)", text or "")
+    ]
+
+
+def _linked_profile_name_from_title(title: str) -> str:
+    name = re.split(r"\s[-|–—]\s", _clean_text(title or ""), maxsplit=1)[0].strip()
+    if _looks_like_person_name(name):
+        return name
+    return ""
+
+
+def _first_name_from_linkedin_profile(profile: str) -> str:
+    path = urlparse(profile).path.lower()
+    slug = path.split("/in/", 1)[-1].strip("/")
+    slug = re.split(r"[/?#]", slug)[0]
+    parts = [part for part in re.split(r"[-_]+", slug) if part and not part.isdigit()]
+    if not parts:
+        return ""
+    first = parts[0]
+    return first[:1].upper() + first[1:]
+
+
+def _lead_key(lead: GeneratedLead) -> str:
+    return (lead.app_store_url or lead.website or lead.organization_name).lower()
 
 
 def _decode_result_url(href: str) -> str:

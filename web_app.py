@@ -32,6 +32,8 @@ from google_sheets import (
 from lead_generator import (
     build_app_store_terms,
     build_lead_search_queries,
+    contact_export_dataframe,
+    enrich_contacts_for_leads,
     generate_app_store_leads,
     generate_leads,
     generated_leads_dataframe,
@@ -137,6 +139,12 @@ def _generated_leads_path() -> Path:
     GENERATED_LEADS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return GENERATED_LEADS_DIR / f"generated_leads_{stamp}.csv"
+
+
+def _generated_contacts_path() -> Path:
+    GENERATED_LEADS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return GENERATED_LEADS_DIR / f"personalizer_contact_leads_{stamp}.csv"
 
 
 def _profile_description(name: str) -> str:
@@ -1150,7 +1158,13 @@ def _lead_generator_panel() -> None:
     left, right = st.columns([0.95, 1.05], gap="large")
     with left:
         source_type = st.selectbox("Source", ["Apple App Store", "Apple App Store + web fallback", "Public web search (experimental)"], index=0)
-        niche = st.text_input("Niche / market", value="mental health app")
+        preference = st.text_area(
+            "Lead preference / ICP",
+            value="Dating apps with founder, CEO or CTO contacts",
+            height=80,
+            help="Describe the kind of companies you want. The contact finder targets founder, CEO and CTO profiles by default.",
+        )
+        niche = st.text_input("App/search phrase", value="dating app")
         target_customer = st.text_input("Target customer or persona", value="mobile app")
         region = st.text_input("Region / App Store country", value="US")
         extra_keywords = st.text_area(
@@ -1159,8 +1173,16 @@ def _lead_generator_panel() -> None:
             height=120,
         )
         max_leads = st.slider("Max leads", min_value=5, max_value=100, value=25, step=5)
-        app_terms = build_app_store_terms(niche, extra_keywords)
-        web_queries = build_lead_search_queries(niche, target_customer, region, extra_keywords)
+        enrich_contacts = st.checkbox(
+            "Find founder/CEO/CTO contacts from public pages",
+            value=True,
+            help="Uses public website/about/team/contact pages. Generic inboxes like hello@ or support@ are ignored.",
+        )
+        max_contacts = st.slider("Contacts per company", min_value=1, max_value=3, value=1, step=1, disabled=not enrich_contacts)
+        lead_query = niche.strip() or preference.strip()
+        web_context = preference.strip() or target_customer
+        app_terms = build_app_store_terms(lead_query, extra_keywords)
+        web_queries = build_lead_search_queries(lead_query, web_context, region, extra_keywords)
         preview_queries = app_terms if source_type.startswith("Apple App Store") else web_queries
         st.caption("Queries: " + " | ".join(preview_queries[:5]))
         if st.button("Generate leads", type="primary", use_container_width=True):
@@ -1176,35 +1198,73 @@ def _lead_generator_panel() -> None:
                         remaining = max_leads - len(leads)
                         if remaining > 0:
                             leads.extend(generate_leads(web_queries, max_leads=remaining))
-                    df = generated_leads_dataframe(leads)
-                    path = _generated_leads_path()
-                    df.to_csv(path, index=False, encoding="utf-8-sig")
-                    st.session_state["generated_leads_df"] = df
-                    st.session_state["generated_leads_path"] = str(path)
-                st.success(f"Generated {len(df)} leads.")
+                    raw_df = generated_leads_dataframe(leads)
+                    raw_path = _generated_leads_path()
+                    raw_df.to_csv(raw_path, index=False, encoding="utf-8-sig")
+                    contact_lookup = {}
+                    strict_contact_count = 0
+                    if enrich_contacts and leads:
+                        contact_lookup = enrich_contacts_for_leads(leads, max_contacts_per_company=max_contacts)
+                        strict_contact_count = len(contact_export_dataframe(leads, contact_lookup))
+                    contact_df = contact_export_dataframe(leads, contact_lookup, include_unmatched_companies=True)
+                    contact_path = _generated_contacts_path()
+                    contact_df.to_csv(contact_path, index=False, encoding="utf-8-sig")
+                    st.session_state["generated_raw_leads_df"] = raw_df
+                    st.session_state["generated_raw_leads_path"] = str(raw_path)
+                    st.session_state["generated_contact_df"] = contact_df
+                    st.session_state["generated_strict_contact_count"] = strict_contact_count
+                    st.session_state["generated_contact_path"] = str(contact_path)
+                    st.session_state["generated_leads_df"] = contact_df if not contact_df.empty else raw_df
+                    st.session_state["generated_leads_path"] = str(contact_path or raw_path)
+                st.success(f"Generated {len(raw_df)} companies and {strict_contact_count} public person-level contacts.")
             except Exception as exc:
                 st.error(f"Lead generation failed: {exc}")
     with right:
-        generated_df = st.session_state.get("generated_leads_df")
+        contact_df = st.session_state.get("generated_contact_df")
+        raw_df = st.session_state.get("generated_raw_leads_df")
         generated_path = st.session_state.get("generated_leads_path")
-        if generated_df is None and generated_path and Path(generated_path).exists():
-            generated_df = pd.read_csv(generated_path, dtype=str).fillna("")
-            st.session_state["generated_leads_df"] = generated_df
-        if generated_df is None:
+        if contact_df is None and generated_path and Path(generated_path).exists():
+            contact_df = pd.read_csv(generated_path, dtype=str).fillna("")
+            st.session_state["generated_contact_df"] = contact_df
+        preview_df = contact_df if contact_df is not None and not contact_df.empty else raw_df
+        if preview_df is None:
             st.info("Generated leads will appear here.")
             return
-        st.dataframe(generated_df, use_container_width=True, height=420)
-        csv_bytes = generated_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-        c1, c2 = st.columns(2)
+        st.dataframe(preview_df, use_container_width=True, height=420)
+        c1, c2, c3 = st.columns(3)
+        strict_contact_count = int(st.session_state.get("generated_strict_contact_count", 0) or 0)
+        if contact_df is not None and not contact_df.empty:
+            contact_csv = contact_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            c1.download_button(
+                "Download contact CSV",
+                contact_csv,
+                "personalizer_contact_leads.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+            c2.download_button(
+                "Download contact XLSX",
+                _df_to_xlsx_bytes(contact_df),
+                "personalizer_contact_leads.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+            if strict_contact_count < len(contact_df):
+                st.warning(
+                    f"{strict_contact_count}/{len(contact_df)} rows have a public person-level email or LinkedIn profile. "
+                    "Rows without public contacts are kept in the same schema for manual enrichment."
+                )
+        raw_download_df = raw_df if raw_df is not None else preview_df
+        raw_csv = raw_download_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
         c1.download_button(
-            "Download generated leads CSV",
-            csv_bytes,
+            "Download raw company CSV",
+            raw_csv,
             "generated_leads.csv",
             "text/csv",
             use_container_width=True,
         )
         if generated_path and Path(generated_path).exists():
-            c2.success("Saved for Setup & Run")
+            c3.success("Saved for Setup & Run")
 
 
 def main() -> None:

@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from input_loader import load_leads
 from batch_runner import _base_row
+from email_verification import email_from_original_columns
 
 
 def test_client_sheet_alias_columns_with_trailing_spaces() -> None:
@@ -68,7 +69,35 @@ def test_clay_style_duplicate_organization_name_sheet_loads_contacts() -> None:
     assert leads[1].original_columns["Organization Name"] == ""
 
 
+def test_generated_contact_export_schema_loads_into_personalizer() -> None:
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "personalizer_contacts.csv"
+        pd.DataFrame(
+            [
+                {
+                    "First Name": "Katie",
+                    "Copy": "",
+                    "Personalization Line": "",
+                    "Company Name": "after app",
+                    "LinkedIn Profile": "https://www.linkedin.com/in/katiedissanayake",
+                    "Personal Email": "katie@afterapp.com",
+                    "Company Website": "https://www.afterapp.com/",
+                }
+            ]
+        ).to_csv(path, index=False)
+
+        leads = load_leads(path, "campaign", deduplicate=False)
+
+    assert len(leads) == 1
+    assert leads[0].company_name == "after app"
+    assert leads[0].website_url == "https://afterapp.com"
+    assert leads[0].recipient_name == "Katie"
+    assert leads[0].linkedin_url == "https://www.linkedin.com/in/katiedissanayake"
+    assert email_from_original_columns(leads[0].original_columns) == "katie@afterapp.com"
+
+
 if __name__ == "__main__":
     test_client_sheet_alias_columns_with_trailing_spaces()
     test_clay_style_duplicate_organization_name_sheet_loads_contacts()
+    test_generated_contact_export_schema_loads_into_personalizer()
     print("input_loader_alias_tests_ok")

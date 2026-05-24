@@ -45,6 +45,7 @@ EMAIL_COLUMN_CANDIDATES = (
     "Contact Email",
     "Work Email",
     "Person Email",
+    "Personal Email",
     "recipient_email",
 )
 

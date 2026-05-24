@@ -117,6 +117,7 @@ CLIENT_COLUMN_ALIASES = {
     "Domain": "website_url",
     "Linkedin": "linkedin_url",
     "LinkedIn": "linkedin_url",
+    "LinkedIn Profile": "linkedin_url",
     "LinkedIn URL": "linkedin_url",
     "App Store": "app_store_url",
     "App Store URL": "app_store_url",
@@ -137,7 +138,7 @@ CANONICAL_COLUMN_SOURCES = {
     "company_name": ["company_name", "Company Name", "Organization Name", "Company", "Organization Name.1"],
     "website_url": ["website_url", "Website", "Website URL", "Company Website", "Domain"],
     # Person-level LinkedIn exports often use "Linkedin"; company-level columns often use "LinkedIn".
-    "linkedin_url": ["linkedin_url", "Linkedin", "LinkedIn URL", "Person Linkedin", "Person LinkedIn", "LinkedIn"],
+    "linkedin_url": ["linkedin_url", "Linkedin", "LinkedIn Profile", "LinkedIn URL", "Person Linkedin", "Person LinkedIn", "LinkedIn"],
     "recipient_name": ["recipient_name", "Person Name", "Full Name", "Contact Name", "First Name", "Name"],
     "recipient_role": ["recipient_role", "Role", "Job Title", "Job Tile", "Title"],
     "app_store_url": ["app_store_url", "App Store URL", "Google Play URL", "App Store", "Google Play"],

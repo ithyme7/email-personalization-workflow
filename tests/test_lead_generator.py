@@ -6,13 +6,17 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lead_generator import (
+    GeneratedLead,
     app_store_brand_name,
     app_store_payload_to_leads,
     build_app_store_terms,
     build_lead_search_queries,
+    contact_export_dataframe,
     generate_leads,
     generated_leads_dataframe,
+    parse_contact_candidates,
     parse_search_results,
+    search_contact_candidates,
 )
 
 
@@ -42,6 +46,21 @@ class FakeResponse:
 class FakeSession:
     def get(self, *args, **kwargs) -> FakeResponse:
         return FakeResponse()
+
+
+class FakeSearchResponse:
+    status_code = 200
+    text = """
+Title: example founder linkedin at DuckDuckGo
+
+## [Jane Doe - LinkedIn](https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.linkedin.com%2Fin%2Fjane-doe-123&rut=abc)
+Jane Doe is Founder and CEO at Example.
+"""
+
+
+class FakeSearchSession:
+    def get(self, *args, **kwargs) -> FakeSearchResponse:
+        return FakeSearchResponse()
 
 
 def test_parse_search_results_decodes_duckduckgo_links() -> None:
@@ -102,3 +121,74 @@ def test_build_app_store_terms_combines_niche_and_terms() -> None:
 def test_app_store_brand_name_prefers_product_brand_over_legal_seller() -> None:
     assert app_store_brand_name("BetterHelp - Therapy", "Compile, Inc.") == "BetterHelp"
     assert app_store_brand_name("Talkspace: Virtual Therapy App", "Groop Internet Platform inc.") == "Talkspace"
+
+
+def test_parse_contact_candidates_prefers_person_level_contacts() -> None:
+    html = """
+    <html>
+      <body>
+        <p>Jane Doe Co-Founder & CEO</p>
+        <a href="mailto:jane@example.app">jane@example.app</a>
+        <a href="mailto:hello@example.app">hello@example.app</a>
+        <a href="https://www.linkedin.com/in/jane-doe-123">LinkedIn</a>
+      </body>
+    </html>
+    """
+    candidates = parse_contact_candidates(html, "https://example.app/team", company_domain="example.app")
+    assert candidates[0].first_name == "Jane"
+    assert candidates[0].email == "jane@example.app"
+    assert candidates[0].linkedin_url == "https://www.linkedin.com/in/jane-doe-123"
+    assert "hello@example.app" not in {candidate.email for candidate in candidates}
+
+
+def test_contact_export_dataframe_matches_personalizer_contact_schema() -> None:
+    lead = app_store_payload_to_leads(
+        {
+            "results": [
+                {
+                    "trackName": "Rootd",
+                    "sellerName": "Simply Rooted Media Inc.",
+                    "trackViewUrl": "https://apps.apple.com/us/app/rootd/id1289018369",
+                    "sellerUrl": "https://www.rootd.io",
+                    "primaryGenreName": "Health & Fitness",
+                    "description": "An anxiety app.",
+                }
+            ]
+        },
+        "mental health anxiety",
+    )[0]
+    candidates = parse_contact_candidates(
+        "<p>Ania Wysocka Founder</p><a href='mailto:ania@rootd.io'>ania@rootd.io</a>",
+        "https://rootd.io/about",
+        company_domain="rootd.io",
+    )
+    df = contact_export_dataframe([lead], {lead.app_store_url: candidates})
+    assert df.columns.tolist() == [
+        "First Name",
+        "Copy",
+        "Personalization Line",
+        "Company Name",
+        "LinkedIn Profile",
+        "Personal Email",
+        "Company Website",
+    ]
+    assert df.loc[0, "First Name"] == "Ania"
+    assert df.loc[0, "Company Name"] == "Rootd"
+    assert df.loc[0, "Personal Email"] == "ania@rootd.io"
+
+
+def test_search_contact_candidates_extracts_linkedin_profiles_from_public_results() -> None:
+    lead = GeneratedLead(
+        organization_name="Example",
+        website="https://example.app",
+        app_store_url="",
+        source="test",
+        discovery_query="example",
+        source_title="",
+        source_snippet="",
+        lead_score=80,
+        lead_notes="",
+    )
+    candidates = search_contact_candidates(lead, session=FakeSearchSession())  # type: ignore[arg-type]
+    assert candidates[0].first_name == "Jane"
+    assert candidates[0].linkedin_url == "https://www.linkedin.com/in/jane-doe-123"
