@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape as html_escape
 import re
+import time
 from typing import Iterable
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
@@ -10,10 +11,13 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import requests
 
+from cache import cache_path, read_cached_json, write_cached_json
+
 
 SEARCH_URL = "https://duckduckgo.com/html/"
 APP_STORE_SEARCH_URL = "https://itunes.apple.com/search"
 CONTACT_SEARCH_URL = "https://r.jina.ai/http://https://duckduckgo.com/html/"
+DISCOVERY_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
 DIRECTORY_DOMAINS = {
     "apps.apple.com",
@@ -106,6 +110,7 @@ CONTACT_PAGE_HINTS = (
 
 EMAIL_PATTERN = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 LINKEDIN_PROFILE_PATTERN = re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/in/[A-Za-z0-9_%\-/?=&.]+", re.IGNORECASE)
+LINKEDIN_COMPANY_PATTERN = re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/company/[A-Za-z0-9_%\-/?=&.]+", re.IGNORECASE)
 PERSON_ROLE_PATTERN = re.compile(
     r"\b([A-Z][A-Za-z'`-]+(?:\s+[A-Z][A-Za-z'`-]+){0,3})\b.{0,80}?\b("
     r"Co[-\s]?Founder|Founder|CEO|Chief Executive Officer|CTO|Chief Technology Officer"
@@ -141,6 +146,39 @@ class ContactCandidate:
     source_url: str = ""
     confidence: int = 0
     notes: str = ""
+
+
+@dataclass(frozen=True)
+class CompanyLinkedInCandidate:
+    url: str
+    source_url: str = ""
+    confidence: int = 0
+    notes: str = ""
+
+
+@dataclass
+class DiscoveryCache:
+    enabled: bool = True
+    namespace: str = "lead_discovery"
+    ttl_seconds: int = DISCOVERY_CACHE_TTL_SECONDS
+
+    def read_text(self, kind: str, key: str) -> str | None:
+        if not self.enabled or not key:
+            return None
+        data = read_cached_json(
+            cache_path(key, prefix=f"{self.namespace}:{kind}:"),
+            ttl_seconds=self.ttl_seconds,
+        )
+        value = data.get("text") if data else None
+        return value if isinstance(value, str) else None
+
+    def write_text(self, kind: str, key: str, text: str) -> None:
+        if not self.enabled or not key or not text:
+            return
+        write_cached_json(
+            cache_path(key, prefix=f"{self.namespace}:{kind}:"),
+            {"text": text},
+        )
 
 
 def build_lead_search_queries(
@@ -329,9 +367,13 @@ def enrich_contacts_for_leads(
     max_contacts_per_company: int = 1,
     timeout_seconds: int = 12,
     use_search_fallback: bool = True,
+    max_search_queries: int = 2,
+    request_delay_seconds: float = 0.6,
+    use_cache: bool = True,
     session: requests.Session | None = None,
 ) -> dict[str, list[ContactCandidate]]:
     active_session = session or requests.Session()
+    cache = DiscoveryCache(enabled=use_cache)
     enriched: dict[str, list[ContactCandidate]] = {}
     for lead in leads:
         contacts = discover_contacts_for_lead(
@@ -339,6 +381,9 @@ def enrich_contacts_for_leads(
             max_contacts=max_contacts_per_company,
             timeout_seconds=timeout_seconds,
             use_search_fallback=use_search_fallback,
+            max_search_queries=max_search_queries,
+            request_delay_seconds=request_delay_seconds,
+            cache=cache,
             session=active_session,
         )
         enriched[_lead_key(lead)] = contacts
@@ -350,20 +395,44 @@ def discover_contacts_for_lead(
     max_contacts: int = 1,
     timeout_seconds: int = 12,
     use_search_fallback: bool = True,
+    max_search_queries: int = 2,
+    request_delay_seconds: float = 0.0,
+    cache: DiscoveryCache | None = None,
     session: requests.Session | None = None,
 ) -> list[ContactCandidate]:
     website = normalize_company_url(lead.website)
     if not website or _is_noise_host(_host(website)) or "apps.apple.com" in _host(website):
         return []
     active_session = session or requests.Session()
-    pages = fetch_contact_pages(website, timeout_seconds=timeout_seconds, session=active_session)
+    pages = fetch_contact_pages(website, timeout_seconds=timeout_seconds, session=active_session, cache=cache)
+    company_linkedin = discover_company_linkedin(
+        lead,
+        pages=pages,
+        timeout_seconds=timeout_seconds,
+        use_search_fallback=use_search_fallback,
+        request_delay_seconds=request_delay_seconds,
+        cache=cache,
+        session=active_session,
+    )
     candidates: list[ContactCandidate] = []
     for page_url, html in pages:
         candidates.extend(parse_contact_candidates(html, page_url, company_domain=_host(website)))
     ranked = rank_contact_candidates(candidates)
     if use_search_fallback and len(ranked) < max_contacts:
-        candidates.extend(search_contact_candidates(lead, timeout_seconds=timeout_seconds, session=active_session))
-    return rank_contact_candidates(candidates)[:max_contacts]
+        candidates.extend(
+            search_contact_candidates(
+                lead,
+                timeout_seconds=timeout_seconds,
+                session=active_session,
+                cache=cache,
+                max_search_queries=max_search_queries,
+                request_delay_seconds=request_delay_seconds,
+            )
+        )
+    ranked = rank_contact_candidates(candidates)
+    if company_linkedin:
+        ranked = [_with_candidate_note(candidate, f"company_linkedin_found:{company_linkedin.url}") for candidate in ranked]
+    return ranked[:max_contacts]
 
 
 def fetch_contact_pages(
@@ -371,12 +440,13 @@ def fetch_contact_pages(
     timeout_seconds: int = 12,
     session: requests.Session | None = None,
     max_pages: int = 5,
+    cache: DiscoveryCache | None = None,
 ) -> list[tuple[str, str]]:
     active_session = session or requests.Session()
     homepage = normalize_company_url(website)
     urls = [homepage]
     html_by_url: dict[str, str] = {}
-    homepage_html = _fetch_html(homepage, active_session, timeout_seconds)
+    homepage_html = _fetch_html_cached(homepage, active_session, timeout_seconds, cache=cache)
     if homepage_html:
         html_by_url[homepage] = homepage_html
         urls.extend(_candidate_contact_links(homepage, homepage_html))
@@ -390,10 +460,67 @@ def fetch_contact_pages(
         if normalized in seen or len(pages) >= max_pages:
             continue
         seen.add(normalized)
-        html = html_by_url.get(normalized) or _fetch_html(normalized, active_session, timeout_seconds)
+        html = html_by_url.get(normalized) or _fetch_html_cached(normalized, active_session, timeout_seconds, cache=cache)
         if html:
             pages.append((normalized, html))
     return pages
+
+
+def discover_company_linkedin(
+    lead: GeneratedLead,
+    pages: list[tuple[str, str]] | None = None,
+    timeout_seconds: int = 12,
+    use_search_fallback: bool = True,
+    request_delay_seconds: float = 0.0,
+    cache: DiscoveryCache | None = None,
+    session: requests.Session | None = None,
+) -> CompanyLinkedInCandidate | None:
+    candidates: list[CompanyLinkedInCandidate] = []
+    for page_url, html in pages or []:
+        for url in _linkedin_company_urls_from_html(html):
+            candidates.append(
+                CompanyLinkedInCandidate(
+                    url=url,
+                    source_url=page_url,
+                    confidence=80,
+                    notes="company_linkedin_on_owned_site",
+                )
+            )
+    ranked = _rank_company_linkedin_candidates(candidates, lead.organization_name)
+    if ranked or not use_search_fallback:
+        return ranked[0] if ranked else None
+    if not _clean_text(lead.organization_name):
+        return None
+
+    active_session = session or requests.Session()
+    query = f'"{lead.organization_name}" site:linkedin.com/company'
+    url = f"{CONTACT_SEARCH_URL}?q={quote_plus(query)}"
+    text = _fetch_text_cached(
+        url,
+        active_session,
+        timeout_seconds,
+        cache=cache,
+        request_delay_seconds=request_delay_seconds,
+    )
+    if not text:
+        return None
+    for title, link in _markdown_links(text):
+        decoded = _decode_result_url(link)
+        linkedin_url = _normalize_linkedin_url(decoded, kind="company")
+        if not linkedin_url:
+            continue
+        confidence = 65
+        if _company_slug_matches_name(linkedin_url, lead.organization_name) or lead.organization_name.lower() in title.lower():
+            confidence += 15
+        candidates.append(
+            CompanyLinkedInCandidate(
+                url=linkedin_url,
+                source_url=url,
+                confidence=min(95, confidence),
+                notes="company_linkedin_public_search",
+            )
+        )
+    return (_rank_company_linkedin_candidates(candidates, lead.organization_name) or [None])[0]
 
 
 def parse_contact_candidates(html: str, source_url: str, company_domain: str = "") -> list[ContactCandidate]:
@@ -455,25 +582,41 @@ def search_contact_candidates(
     lead: GeneratedLead,
     timeout_seconds: int = 12,
     session: requests.Session | None = None,
+    cache: DiscoveryCache | None = None,
+    max_search_queries: int = 2,
+    request_delay_seconds: float = 0.0,
 ) -> list[ContactCandidate]:
     active_session = session or requests.Session()
-    query = f'"{lead.organization_name}" founder CEO CTO email LinkedIn'
-    url = f"{CONTACT_SEARCH_URL}?q={quote_plus(query)}"
-    text = _fetch_text(url, active_session, timeout_seconds)
+    search_texts: list[str] = []
+    source_urls: list[str] = []
+    for query in _contact_search_queries(lead)[: max(1, max_search_queries)]:
+        url = f"{CONTACT_SEARCH_URL}?q={quote_plus(query)}"
+        text = _fetch_text_cached(
+            url,
+            active_session,
+            timeout_seconds,
+            cache=cache,
+            request_delay_seconds=request_delay_seconds,
+        )
+        if text:
+            search_texts.append(f"Query: {query}\n{text}")
+            source_urls.append(url)
+    text = "\n\n".join(search_texts)
     if not text:
         return []
     decoded_links = [_decode_result_url(link) for _, link in _markdown_links(text)]
     linkedin_profiles = [
-        profile.rstrip("/")
+        _normalize_linkedin_url(profile, kind="profile")
         for link in decoded_links
         for profile in LINKEDIN_PROFILE_PATTERN.findall(link)
         if "/company/" not in profile.lower()
     ]
+    linkedin_profiles = [profile for profile in linkedin_profiles if profile]
     company_domain = _host(lead.website)
     search_markup = "<html><body><pre>" + html_escape("\n".join([text, *linkedin_profiles])) + "</pre></body></html>"
     candidates = parse_contact_candidates(
         search_markup,
-        url,
+        source_urls[0] if source_urls else "",
         company_domain=company_domain,
     )
     candidates = [
@@ -483,8 +626,8 @@ def search_contact_candidates(
     ]
     existing_profile_urls = {candidate.linkedin_url for candidate in candidates if candidate.linkedin_url}
     for title, link in _markdown_links(text):
-        decoded = _decode_result_url(link).rstrip("/")
-        if not LINKEDIN_PROFILE_PATTERN.match(decoded) or decoded in existing_profile_urls or "/company/" in decoded.lower():
+        decoded = _normalize_linkedin_url(_decode_result_url(link), kind="profile")
+        if not decoded or decoded in existing_profile_urls:
             continue
         full_name = _linked_profile_name_from_title(title)
         first_name = _first_name(full_name) or _first_name_from_linkedin_profile(decoded)
@@ -495,7 +638,7 @@ def search_contact_candidates(
                 first_name=first_name,
                 full_name=full_name,
                 linkedin_url=decoded,
-                source_url=url,
+                source_url=source_urls[0] if source_urls else "",
                 confidence=50,
                 notes="linkedin_profile_search_result",
             )
@@ -675,7 +818,7 @@ def _fetch_html(url: str, session: requests.Session, timeout_seconds: int) -> st
                 )
             },
         )
-        content_type = response.headers.get("content-type", "")
+        content_type = getattr(response, "headers", {}).get("content-type", "")
         if response.status_code >= 400 or ("html" not in content_type and content_type):
             return ""
         return response.text[:500_000]
@@ -695,6 +838,41 @@ def _fetch_text(url: str, session: requests.Session, timeout_seconds: int) -> st
         return response.text[:500_000]
     except requests.RequestException:
         return ""
+
+
+def _fetch_html_cached(
+    url: str,
+    session: requests.Session,
+    timeout_seconds: int,
+    cache: DiscoveryCache | None = None,
+) -> str:
+    if cache:
+        cached = cache.read_text("html", url)
+        if cached is not None:
+            return cached
+    html = _fetch_html(url, session, timeout_seconds)
+    if html and cache:
+        cache.write_text("html", url, html)
+    return html
+
+
+def _fetch_text_cached(
+    url: str,
+    session: requests.Session,
+    timeout_seconds: int,
+    cache: DiscoveryCache | None = None,
+    request_delay_seconds: float = 0.0,
+) -> str:
+    if cache:
+        cached = cache.read_text("search", url)
+        if cached is not None:
+            return cached
+    if request_delay_seconds > 0:
+        time.sleep(request_delay_seconds)
+    text = _fetch_text(url, session, timeout_seconds)
+    if text and cache:
+        cache.write_text("search", url, text)
+    return text
 
 
 def _candidate_contact_links(base_url: str, html: str) -> list[str]:
@@ -733,11 +911,107 @@ def _linkedin_profiles_from_soup(soup: BeautifulSoup) -> list[str]:
     profiles: list[str] = []
     for anchor in soup.find_all("a", href=True):
         href = str(anchor.get("href", "")).strip()
-        match = LINKEDIN_PROFILE_PATTERN.search(href)
-        if match:
-            profiles.append(match.group(0).rstrip("/"))
-    text_profiles = [match.group(0).rstrip("/") for match in LINKEDIN_PROFILE_PATTERN.finditer(soup.get_text(" ", strip=True))]
+        normalized = _normalize_linkedin_url(href, kind="profile")
+        if normalized:
+            profiles.append(normalized)
+    text_profiles = [
+        _normalize_linkedin_url(match.group(0), kind="profile")
+        for match in LINKEDIN_PROFILE_PATTERN.finditer(soup.get_text(" ", strip=True))
+    ]
+    text_profiles = [profile for profile in text_profiles if profile]
     return list(dict.fromkeys(profiles + text_profiles))
+
+
+def _linkedin_company_urls_from_html(html: str) -> list[str]:
+    soup = BeautifulSoup(html or "", "html.parser")
+    urls: list[str] = []
+    for anchor in soup.find_all("a", href=True):
+        normalized = _normalize_linkedin_url(str(anchor.get("href", "")), kind="company")
+        if normalized:
+            urls.append(normalized)
+    text_urls = [
+        _normalize_linkedin_url(match.group(0), kind="company")
+        for match in LINKEDIN_COMPANY_PATTERN.finditer(soup.get_text(" ", strip=True))
+    ]
+    return list(dict.fromkeys(url for url in [*urls, *text_urls] if url))
+
+
+def _rank_company_linkedin_candidates(
+    candidates: Iterable[CompanyLinkedInCandidate],
+    company_name: str,
+) -> list[CompanyLinkedInCandidate]:
+    best_by_url: dict[str, CompanyLinkedInCandidate] = {}
+    for candidate in candidates:
+        if not candidate.url:
+            continue
+        score = candidate.confidence
+        if _company_slug_matches_name(candidate.url, company_name):
+            score += 10
+        scored = CompanyLinkedInCandidate(
+            url=candidate.url,
+            source_url=candidate.source_url,
+            confidence=min(100, score),
+            notes=candidate.notes,
+        )
+        existing = best_by_url.get(scored.url)
+        if not existing or scored.confidence > existing.confidence:
+            best_by_url[scored.url] = scored
+    return sorted(best_by_url.values(), key=lambda item: item.confidence, reverse=True)
+
+
+def _normalize_linkedin_url(value: str, kind: str) -> str:
+    decoded = _decode_result_url(value or "")
+    pattern = LINKEDIN_PROFILE_PATTERN if kind == "profile" else LINKEDIN_COMPANY_PATTERN
+    match = pattern.search(decoded)
+    if not match:
+        return ""
+    parsed = urlparse(match.group(0))
+    host = parsed.netloc.lower()
+    if host != "linkedin.com" and not host.endswith(".linkedin.com"):
+        return ""
+    path = parsed.path.rstrip("/")
+    if kind == "profile" and not path.lower().startswith("/in/"):
+        return ""
+    if kind == "company" and not path.lower().startswith("/company/"):
+        return ""
+    return f"https://www.linkedin.com{path}"
+
+
+def _company_slug_matches_name(linkedin_url: str, company_name: str) -> bool:
+    slug = urlparse(linkedin_url).path.lower().split("/company/", 1)[-1].strip("/")
+    slug_key = re.sub(r"[^a-z0-9]+", "", slug)
+    company_key = re.sub(r"[^a-z0-9]+", "", (company_name or "").lower())
+    if not slug_key or not company_key:
+        return False
+    return slug_key in company_key or company_key in slug_key
+
+
+def _contact_search_queries(lead: GeneratedLead) -> list[str]:
+    company = _clean_text(lead.organization_name)
+    if not company:
+        return []
+    host = _host(lead.website)
+    queries = [
+        f'"{company}" founder CEO CTO email LinkedIn',
+        f'"{company}" site:linkedin.com/in founder CEO CTO',
+    ]
+    if host:
+        queries.insert(1, f'"{company}" "{host}" founder CEO CTO')
+    return list(dict.fromkeys(queries))
+
+
+def _with_candidate_note(candidate: ContactCandidate, note: str) -> ContactCandidate:
+    notes = " | ".join(part for part in [candidate.notes, note] if part)
+    return ContactCandidate(
+        first_name=candidate.first_name,
+        full_name=candidate.full_name,
+        role=candidate.role,
+        email=candidate.email,
+        linkedin_url=candidate.linkedin_url,
+        source_url=candidate.source_url,
+        confidence=candidate.confidence,
+        notes=notes,
+    )
 
 
 def _people_from_role_lines(lines: list[str]) -> list[tuple[str, str]]:

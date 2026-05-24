@@ -1154,7 +1154,7 @@ def _profile_picker() -> str:
 
 def _lead_generator_panel() -> None:
     st.subheader("Generate lead list")
-    st.caption("Creates a lightweight company/domain CSV from public sources. Contact discovery is intentionally left blank unless supplied later.")
+    st.caption("Creates a lightweight company/domain CSV from public sources, with optional cached founder/CEO/CTO discovery.")
     left, right = st.columns([0.95, 1.05], gap="large")
     with left:
         source_type = st.selectbox("Source", ["Apple App Store", "Apple App Store + web fallback", "Public web search (experimental)"], index=0)
@@ -1176,9 +1176,39 @@ def _lead_generator_panel() -> None:
         enrich_contacts = st.checkbox(
             "Find founder/CEO/CTO contacts from public pages",
             value=True,
-            help="Uses public website/about/team/contact pages. Generic inboxes like hello@ or support@ are ignored.",
+            help="Uses owned website/about/team/contact pages first, then cached public search snippets. Generic inboxes like hello@ or support@ are ignored.",
         )
         max_contacts = st.slider("Contacts per company", min_value=1, max_value=3, value=1, step=1, disabled=not enrich_contacts)
+        public_search_fallback = st.checkbox(
+            "Use public search fallback for LinkedIn/contact discovery",
+            value=True,
+            disabled=not enrich_contacts,
+            help="Avoids logged-in LinkedIn scraping. Searches public snippets/results when owned pages do not expose enough person-level contacts.",
+        )
+        search_depth = st.slider(
+            "Public search depth",
+            min_value=1,
+            max_value=3,
+            value=2,
+            step=1,
+            disabled=not enrich_contacts or not public_search_fallback,
+            help="Higher depth can find more contacts, but uses more public search requests.",
+        )
+        search_delay = st.number_input(
+            "Delay between public search calls",
+            min_value=0.0,
+            max_value=5.0,
+            value=0.6,
+            step=0.1,
+            disabled=not enrich_contacts or not public_search_fallback,
+            help="Keeps larger batches gentler and more reliable.",
+        )
+        use_discovery_cache = st.checkbox(
+            "Use discovery cache",
+            value=True,
+            disabled=not enrich_contacts,
+            help="Reuses website/search results for repeat runs so the same company is not looked up again.",
+        )
         lead_query = niche.strip() or preference.strip()
         web_context = preference.strip() or target_customer
         app_terms = build_app_store_terms(lead_query, extra_keywords)
@@ -1204,7 +1234,14 @@ def _lead_generator_panel() -> None:
                     contact_lookup = {}
                     strict_contact_count = 0
                     if enrich_contacts and leads:
-                        contact_lookup = enrich_contacts_for_leads(leads, max_contacts_per_company=max_contacts)
+                        contact_lookup = enrich_contacts_for_leads(
+                            leads,
+                            max_contacts_per_company=max_contacts,
+                            use_search_fallback=public_search_fallback,
+                            max_search_queries=search_depth,
+                            request_delay_seconds=float(search_delay),
+                            use_cache=use_discovery_cache,
+                        )
                         strict_contact_count = len(contact_export_dataframe(leads, contact_lookup))
                     contact_df = contact_export_dataframe(leads, contact_lookup, include_unmatched_companies=True)
                     contact_path = _generated_contacts_path()

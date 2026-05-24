@@ -6,12 +6,14 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lead_generator import (
+    DiscoveryCache,
     GeneratedLead,
     app_store_brand_name,
     app_store_payload_to_leads,
     build_app_store_terms,
     build_lead_search_queries,
     contact_export_dataframe,
+    discover_company_linkedin,
     generate_leads,
     generated_leads_dataframe,
     parse_contact_candidates,
@@ -60,6 +62,30 @@ Jane Doe is Founder and CEO at Example.
 
 class FakeSearchSession:
     def get(self, *args, **kwargs) -> FakeSearchResponse:
+        return FakeSearchResponse()
+
+
+class FakeCompanySearchResponse:
+    status_code = 200
+    text = """
+Title: Example App LinkedIn at DuckDuckGo
+
+## [Example App - LinkedIn](https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.linkedin.com%2Fcompany%2Fexample-app%3Ftrk%3Dpublic_profile&rut=abc)
+Example App company page on LinkedIn.
+"""
+
+
+class FakeCompanySearchSession:
+    def get(self, *args, **kwargs) -> FakeCompanySearchResponse:
+        return FakeCompanySearchResponse()
+
+
+class CountingSearchSession:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def get(self, *args, **kwargs) -> FakeSearchResponse:
+        self.calls += 1
         return FakeSearchResponse()
 
 
@@ -192,3 +218,82 @@ def test_search_contact_candidates_extracts_linkedin_profiles_from_public_result
     candidates = search_contact_candidates(lead, session=FakeSearchSession())  # type: ignore[arg-type]
     assert candidates[0].first_name == "Jane"
     assert candidates[0].linkedin_url == "https://www.linkedin.com/in/jane-doe-123"
+
+
+def test_discover_company_linkedin_prefers_owned_site_links() -> None:
+    lead = GeneratedLead(
+        organization_name="Example App",
+        website="https://example.app",
+        app_store_url="",
+        source="test",
+        discovery_query="example",
+        source_title="",
+        source_snippet="",
+        lead_score=80,
+        lead_notes="",
+    )
+    pages = [
+        (
+            "https://example.app",
+            '<a href="https://www.linkedin.com/company/example-app?trk=footer">LinkedIn</a>',
+        )
+    ]
+    result = discover_company_linkedin(lead, pages=pages, use_search_fallback=False)
+    assert result is not None
+    assert result.url == "https://www.linkedin.com/company/example-app"
+    assert result.confidence >= 80
+
+
+def test_discover_company_linkedin_uses_public_search_fallback() -> None:
+    lead = GeneratedLead(
+        organization_name="Example App",
+        website="https://example.app",
+        app_store_url="",
+        source="test",
+        discovery_query="example",
+        source_title="",
+        source_snippet="",
+        lead_score=80,
+        lead_notes="",
+    )
+    result = discover_company_linkedin(
+        lead,
+        pages=[],
+        session=FakeCompanySearchSession(),  # type: ignore[arg-type]
+        cache=DiscoveryCache(enabled=False),
+    )
+    assert result is not None
+    assert result.url == "https://www.linkedin.com/company/example-app"
+    assert "public_search" in result.notes
+
+
+def test_search_contact_candidates_uses_discovery_cache() -> None:
+    lead = GeneratedLead(
+        organization_name="Cache Example",
+        website="https://cache-example.app",
+        app_store_url="",
+        source="test",
+        discovery_query="example",
+        source_title="",
+        source_snippet="",
+        lead_score=80,
+        lead_notes="",
+    )
+    session = CountingSearchSession()
+    cache = DiscoveryCache(enabled=True, namespace=f"unit-test-contact-search-{id(session)}")
+
+    first = search_contact_candidates(
+        lead,
+        session=session,  # type: ignore[arg-type]
+        cache=cache,
+        max_search_queries=1,
+    )
+    second = search_contact_candidates(
+        lead,
+        session=session,  # type: ignore[arg-type]
+        cache=cache,
+        max_search_queries=1,
+    )
+
+    assert session.calls == 1
+    assert first[0].linkedin_url == second[0].linkedin_url
