@@ -29,6 +29,13 @@ from google_sheets import (
     read_private_sheet,
     read_public_sheet,
 )
+from lead_generator import (
+    build_app_store_terms,
+    build_lead_search_queries,
+    generate_app_store_leads,
+    generate_leads,
+    generated_leads_dataframe,
+)
 from run_history import append_run_history, load_run_history
 from preflight import has_blocking_failures, run_preflight
 from sendability import (
@@ -48,6 +55,7 @@ from web_app_views import render_eval_tab, render_training_tab
 DEFAULT_CONTEXT = "We help mobile app teams with this type of work, figure out where users drop off and why."
 RUN_INPUT_DIR = DATA_DIR / "ui_uploads"
 RUN_OUTPUT_DIR = OUTPUT_DIR / "ui_runs"
+GENERATED_LEADS_DIR = DATA_DIR / "generated_leads"
 CUSTOM_PROFILE_DIR = DATA_DIR / "custom_tone_profiles"
 SAMPLE_INPUT_PATH = DATA_DIR / "input" / "sample_companies.csv"
 st.set_page_config(
@@ -123,6 +131,12 @@ def _output_path(input_path: Path) -> Path:
     RUN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return RUN_OUTPUT_DIR / f"{input_path.stem}_review_{stamp}.xlsx"
+
+
+def _generated_leads_path() -> Path:
+    GENERATED_LEADS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return GENERATED_LEADS_DIR / f"generated_leads_{stamp}.csv"
 
 
 def _profile_description(name: str) -> str:
@@ -1130,6 +1144,69 @@ def _profile_picker() -> str:
     return selected_tone
 
 
+def _lead_generator_panel() -> None:
+    st.subheader("Generate lead list")
+    st.caption("Creates a lightweight company/domain CSV from public sources. Contact discovery is intentionally left blank unless supplied later.")
+    left, right = st.columns([0.95, 1.05], gap="large")
+    with left:
+        source_type = st.selectbox("Source", ["Apple App Store", "Apple App Store + web fallback", "Public web search (experimental)"], index=0)
+        niche = st.text_input("Niche / market", value="mental health app")
+        target_customer = st.text_input("Target customer or persona", value="mobile app")
+        region = st.text_input("Region / App Store country", value="US")
+        extra_keywords = st.text_area(
+            "Search terms or angles, one per line",
+            value="therapy\nanxiety\nsleep\nadhd\nwellness",
+            height=120,
+        )
+        max_leads = st.slider("Max leads", min_value=5, max_value=100, value=25, step=5)
+        app_terms = build_app_store_terms(niche, extra_keywords)
+        web_queries = build_lead_search_queries(niche, target_customer, region, extra_keywords)
+        preview_queries = app_terms if source_type.startswith("Apple App Store") else web_queries
+        st.caption("Queries: " + " | ".join(preview_queries[:5]))
+        if st.button("Generate leads", type="primary", use_container_width=True):
+            try:
+                with st.spinner("Searching public sources and deduping company domains..."):
+                    if source_type == "Apple App Store":
+                        leads = generate_app_store_leads(app_terms, country=region, max_leads=max_leads)
+                    elif source_type.startswith("Public web search"):
+                        leads = generate_leads(web_queries, max_leads=max_leads)
+                    else:
+                        app_limit = max(1, int(max_leads * 0.7))
+                        leads = generate_app_store_leads(app_terms, country=region, max_leads=app_limit)
+                        remaining = max_leads - len(leads)
+                        if remaining > 0:
+                            leads.extend(generate_leads(web_queries, max_leads=remaining))
+                    df = generated_leads_dataframe(leads)
+                    path = _generated_leads_path()
+                    df.to_csv(path, index=False, encoding="utf-8-sig")
+                    st.session_state["generated_leads_df"] = df
+                    st.session_state["generated_leads_path"] = str(path)
+                st.success(f"Generated {len(df)} leads.")
+            except Exception as exc:
+                st.error(f"Lead generation failed: {exc}")
+    with right:
+        generated_df = st.session_state.get("generated_leads_df")
+        generated_path = st.session_state.get("generated_leads_path")
+        if generated_df is None and generated_path and Path(generated_path).exists():
+            generated_df = pd.read_csv(generated_path, dtype=str).fillna("")
+            st.session_state["generated_leads_df"] = generated_df
+        if generated_df is None:
+            st.info("Generated leads will appear here.")
+            return
+        st.dataframe(generated_df, use_container_width=True, height=420)
+        csv_bytes = generated_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        c1, c2 = st.columns(2)
+        c1.download_button(
+            "Download generated leads CSV",
+            csv_bytes,
+            "generated_leads.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+        if generated_path and Path(generated_path).exists():
+            c2.success("Saved for Setup & Run")
+
+
 def main() -> None:
     _inject_css()
     st.title("Email Personalization Workflow")
@@ -1137,8 +1214,19 @@ def main() -> None:
 
     provider, model_name, api_key, input_price, output_price, advanced_detectors, lighthouse_review, research_region = _sidebar_settings()
 
-    dashboard_tab, setup_tab, review_tab, export_tab, training_tab, eval_tab, calibration_tab, history_tab, presets_tab = st.tabs(
-        ["Dashboard", "Setup & Run", "Review & Edit", "Export", "Client Training", "Evals", "Tone Calibration", "History", "Tone Presets"]
+    dashboard_tab, lead_generator_tab, setup_tab, review_tab, export_tab, training_tab, eval_tab, calibration_tab, history_tab, presets_tab = st.tabs(
+        [
+            "Dashboard",
+            "Lead Generator",
+            "Setup & Run",
+            "Review & Edit",
+            "Export",
+            "Client Training",
+            "Evals",
+            "Tone Calibration",
+            "History",
+            "Tone Presets",
+        ]
     )
 
     with dashboard_tab:
@@ -1162,12 +1250,16 @@ def main() -> None:
             _dashboard(st.session_state["review_df"], st.session_state.get("cost_estimate"))
         _how_it_works_panel()
 
+    with lead_generator_tab:
+        _lead_generator_panel()
+
     with setup_tab:
         left, right = st.columns([1.05, 0.95], gap="large")
         with left:
             workspace = _client_workspace_panel()
             st.subheader("1. Input")
-            input_source = st.radio("Lead source", ["CSV upload", "Google Sheets", "Demo sample"], horizontal=True)
+            input_source_options = ["CSV upload", "Generated leads", "Google Sheets", "Demo sample"]
+            input_source = st.radio("Lead source", input_source_options, horizontal=True)
             input_path: Path | None = None
             uploaded_file = None
             sheet_url = ""
@@ -1176,6 +1268,16 @@ def main() -> None:
 
             if input_source == "CSV upload":
                 uploaded_file = st.file_uploader("Lead CSV", type=["csv"])
+            elif input_source == "Generated leads":
+                generated_path = st.session_state.get("generated_leads_path")
+                if generated_path and Path(generated_path).exists():
+                    st.success(f"Using generated lead list: {Path(generated_path).name}")
+                    generated_df = st.session_state.get("generated_leads_df")
+                    if generated_df is None:
+                        generated_df = pd.read_csv(generated_path, dtype=str).fillna("")
+                    st.dataframe(generated_df.head(10), use_container_width=True)
+                else:
+                    st.info("Generate a lead list in the Lead Generator tab first.")
             elif input_source == "Google Sheets":
                 sheet_url = st.text_input("Google Sheets URL")
                 worksheet_name = st.text_input("Worksheet name or tab name, optional")
@@ -1225,6 +1327,12 @@ def main() -> None:
                             st.error("Paste a Google Sheets URL first.")
                             st.stop()
                         input_path = _load_google_sheet_to_csv(sheet_url, worksheet_name, sheet_service_file)
+                    elif input_source == "Generated leads":
+                        generated_path = st.session_state.get("generated_leads_path")
+                        if not generated_path or not Path(generated_path).exists():
+                            st.error("Generate a lead list first.")
+                            st.stop()
+                        input_path = Path(generated_path)
                     else:
                         if not SAMPLE_INPUT_PATH.exists():
                             st.error("Sample CSV is missing.")
